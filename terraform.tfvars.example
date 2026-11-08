@@ -1,0 +1,65 @@
+project_id     = "your-gcp-project-id"
+project_number = "123456789012"
+region         = "asia-northeast1"
+
+# Cloudflare provider authentication is read from the CLOUDFLARE_API_TOKEN
+# environment variable when Terraform runs. The token needs DNS edit access
+# for this zone.
+cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
+
+# Optional overrides (defaults are fine for a single-service prod setup)
+# api_hostname       = "api.vinoguessr.com"
+# service_name       = "vinoguessr-api"
+# artifact_repo_id   = "vinoguessr-api"
+# github_repo        = "vinoguessr/vinoguessr-api"
+# min_instance_count = 0
+# max_instance_count = 10
+# cpu                = "1"
+# cpu_idle           = false
+# memory             = "512Mi"
+# otel_collector_config_secret_id = "vinoguessr-otel-collector-config"
+# otel_collector_cpu              = "1"
+# otel_collector_image            = "us-docker.pkg.dev/cloud-ops-agents-artifacts/google-cloud-opentelemetry-collector/otelcol-google:0.144.0"
+# otel_collector_memory           = "256Mi"
+# allow_unauthenticated = true
+# Default true blocks direct public *.run.app access. Set this to false only
+# during initial load balancer / certificate bootstrap, then remove the override.
+# restrict_direct_cloud_run_ingress = true
+
+# The first full `terraform apply` creates Cloud Run with this tag, so the image
+# must already exist in Artifact Registry: set it to the commit SHA pushed by
+# vinoguessr-api's Deploy workflow (README step 9). After that, GitHub Actions
+# overrides the running image with `gcloud run services update --image=...:<sha>`,
+# and Terraform ignores image drift (see cloud_run.tf lifecycle block).
+image_tag = "<commit SHA pushed by the vinoguessr-api Deploy workflow>"
+
+# Non-sensitive environment variables.
+# Sensitive values (POSTGRES_PASSWORD, VALKEY_PASSWORD, EDDSA_PRIVATE_KEY,
+# CLOUDFLARE_API_TOKEN, OTP_SECRET_KEY) are managed via Secret Manager —
+# upload versions with `gcloud secrets versions add <id> --data-file=-`.
+#
+# CLOUD_RUN_REGION is auto-injected from `region` above; do NOT set it here.
+# OTel SDK transport settings (exporter, protocol, endpoint) are not injected:
+# the swift-otel defaults match the Cloud Run sidecar collector setup, and
+# OTel resource attributes live in the app code.
+# RELYING_PARTY_ORIGIN should be the public-facing origin (custom domain or
+# Cloud Run URL), NOT a placeholder.
+app_env = {
+  APPLE_APP_ID                   = "XXXXXXXX.com.example.app"
+  RELYING_PARTY_ID               = "example.com"
+  RELYING_PARTY_NAME             = "Example"
+  RELYING_PARTY_ORIGIN           = "https://example.com" # REQUIRED: replace with the public-facing origin (custom domain or Cloud Run URL); WebAuthn fails if this is wrong.
+  POSTGRES_HOSTNAME              = "db.example.com"
+  POSTGRES_USER                  = "vinoguessr"
+  POSTGRES_DB                    = "vinoguessr"
+  VALKEY_HOSTNAME                = "cache.example.com"
+  VALKEY_USERNAME                = "default"
+  CLOUDFLARE_ACCOUNT_ID          = "xxxxxxxxxxxxxxxx"
+  LOG_LEVEL                      = "info"
+  JWT_ISSUER                     = "vinoguessr-api"
+  JWT_AUDIENCE                   = "vinoguessr-app"
+  RATELIMIT_DURATION_SECONDS     = "60"
+  RATELIMIT_IP_ADDRESS_MAX_COUNT = "60"
+  RATELIMIT_USER_TOKEN_MAX_COUNT = "120"
+  RATELIMIT_AUTHENTICATION_ENDPOINT_MAX_COUNT = "30"
+}

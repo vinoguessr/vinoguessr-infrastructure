@@ -1,0 +1,20 @@
+name: Repository CI
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: repository-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  policy:
+    uses: vinoguessr/.github/.github/workflows/reusable-repository.yml@01fd9c61bce2139beb8ea173339d45c02d49b69f
+    permissions:
+      contents: read
+  terraform:
+    uses: vinoguessr/.github/.github/workflows/reusable-terraform.yml@01fd9c61bce2139beb8ea173339d45c02d49b69f
+    permissions:
+      contents: read

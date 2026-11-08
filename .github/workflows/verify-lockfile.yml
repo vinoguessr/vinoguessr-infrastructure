@@ -1,0 +1,30 @@
+name: Workflow lockfile
+on:
+  pull_request:
+  push:
+    branches: [main, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: actions-lock-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  verify:
+    name: Verify action dependency provenance
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Verify the official lockfile tool and action provenance
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download v0.4.0 --repo github/gh-actions-lock --pattern linux-amd64 --dir "$RUNNER_TEMP/actions-lock"
+          cd "$RUNNER_TEMP/actions-lock"
+          echo 'f9da98f2a6e9e0ae77deadf9a2319a8a86bb002b541cc3203b247cc59fb04842  linux-amd64' | sha256sum --check --strict
+          chmod +x linux-amd64
+          cd "$GITHUB_WORKSPACE"
+          "$RUNNER_TEMP/actions-lock/linux-amd64" --verify --no-narrow

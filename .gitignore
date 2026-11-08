@@ -1,0 +1,21 @@
+# VinoGuessr foundation baseline (vinoguessr/.github)
+.DS_Store
+__pycache__/
+.env
+.env.*
+!.env.example
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+!*.tfvars.example
+*.p12
+*.p8
+*.key
+*.pem

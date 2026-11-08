@@ -1,0 +1,43 @@
+name: 実装タスク
+description: 受け入れ条件と依存関係を持つ実装・基盤タスク
+title: "[Task] "
+labels: ["type:task"]
+body:
+  - type: textarea
+    id: outcome
+    attributes:
+      label: 目的と期待する動作
+      description: 対象利用者・対象リポジトリの範囲を記載してください。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 受け入れ条件
+      description: 検証可能な条件をチェックリストで記載してください。
+      value: "- [ ] "
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 依存関係・Sub-issues・関連ADR
+      description: ブロックするIssueを完全URLで記載し、GitHubのDependenciesにも設定してください。依存がなければ「なし」。
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: 検証計画
+      description: ビルド・単体/統合/E2E・MCP・並行Review/Security Reviewの対象を記載してください。
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: 作成前の確認
+      options:
+        - label: 既存Issue・PRを検索し、重複がないことを確認した
+          required: true
+        - label: Secrets・個人情報を含まない
+          required: true

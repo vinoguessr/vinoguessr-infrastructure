@@ -1,2 +1,220 @@
 # vinoguessr-infrastructure
-VinoGuessr infrastructure: Terraform / Google Cloud Run / Cloudflare / OpenTelemetry
+
+Terraform for the VinoGuessr production environment: Cloud Run, Artifact Registry, Secret Manager, IAM, Workload Identity Federation, the external HTTPS Load Balancer with Cloud Armor and Certificate Manager, and Cloudflare DNS for `vinoguessr.com`.
+
+## How it fits together
+
+- **Images and rollouts**: `vinoguessr-api`'s GitHub Actions builds the image, pushes it to Artifact Registry, applies Atlas migrations, and runs `gcloud run services update --image=...`. Terraform ignores drift in the running image.
+- **Authentication**: Workload Identity Federation. No long-lived JSON keys. Only the Deploy workflow (`.github/workflows/deploy.yml`) running on the `main` branch of `vinoguessr/vinoguessr-api`, checked by repository name, repository ID, and owner ID, can impersonate the deployer service account.
+- **Running Terraform**: locally by the owner, after explicit approval. GitHub Actions never runs `terraform apply`; PRs run only `fmt` / `init -backend=false` / `validate`.
+- **Environment**: production only.
+- **Observability**: an OpenTelemetry Collector sidecar on Cloud Run. Its configuration (`otel/collector-config.yaml`) is not secret and is stored as a Secret Manager version by Terraform.
+- **Public path**: `api.vinoguessr.com` is a Cloudflare proxied DNS record → Google global external HTTPS Load Balancer → Cloud Run serverless NEG. Cloud Armor allows only Cloudflare proxy IPs.
+- **Exposure**: `allow_unauthenticated = true` stays on. With `restrict_direct_cloud_run_ingress = true` (the default), Cloud Run accepts traffic only through the load balancer and rejects direct `*.run.app` access.
+
+## Bootstrapping a new project
+
+These steps build the environment in an empty project (`vinoguessr`). Run every `terraform apply` only after the owner approves it.
+
+Before starting:
+
+- Link a billing account to the project.
+- Note the project number for `project_number` in `terraform.tfvars`: `gcloud projects describe vinoguessr --format='value(projectNumber)'`.
+- If the project belongs to an organization, an organization policy such as `iam.allowedPolicyMemberDomains` can reject the `allUsers` Cloud Run invoker binding. Check the policies before step 10.
+
+### 0. Shell variables
+
+Export these first; when you resume in a new terminal, start here again.
+
+```sh
+export PROJECT_ID="vinoguessr"
+export REGION="asia-northeast1"
+export STATE_BUCKET="${PROJECT_ID}-tfstate"
+# Token with DNS edit access to vinoguessr.com; read it without echoing so it stays out of shell history.
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
+```
+
+### 1. Authenticate as a project Owner/Editor
+
+```sh
+gcloud auth login
+gcloud auth application-default login
+gcloud config set project "$PROJECT_ID"
+```
+
+### 2. Enable the APIs Terraform needs to start
+
+Terraform enables the remaining APIs with `google_project_service`, but these three must be enabled by hand first, or `terraform init` and the first `apply` fail.
+
+```sh
+gcloud services enable \
+  serviceusage.googleapis.com \
+  cloudresourcemanager.googleapis.com \
+  iam.googleapis.com
+```
+
+### 3. Create the state bucket
+
+Bucket names are globally unique; `<PROJECT_ID>-tfstate` rarely collides.
+
+```sh
+gcloud storage buckets create "gs://$STATE_BUCKET" \
+  --location="$REGION" \
+  --uniform-bucket-level-access
+gcloud storage buckets update "gs://$STATE_BUCKET" --versioning
+```
+
+### 4. Create the variables file
+
+```sh
+cp terraform.tfvars.example terraform.tfvars
+$EDITOR terraform.tfvars
+```
+
+Set `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
+
+Terraform does not change Cloudflare's SSL/TLS mode. Confirm it is `Full (strict)` in the Cloudflare dashboard before publishing `api.vinoguessr.com`.
+
+### 5. `terraform init`
+
+```sh
+terraform init \
+  -backend-config="bucket=$STATE_BUCKET" \
+  -backend-config="prefix=vinoguessr"
+```
+
+### 6. Create everything except Cloud Run
+
+Cloud Run cannot be created until its image exists, and secrets need a version before a revision can start. Create the APIs, the Artifact Registry repository, the secret containers, the OTel Collector configuration version, and the deployer identity first.
+
+```sh
+terraform apply \
+  -target=google_project_service.required \
+  -target=google_artifact_registry_repository.app \
+  -target=google_secret_manager_secret.app \
+  -target=google_secret_manager_secret.otel_collector_config \
+  -target=google_secret_manager_secret_version.otel_collector_config \
+  -target=google_iam_workload_identity_pool.github \
+  -target=google_iam_workload_identity_pool_provider.github \
+  -target=google_service_account.deployer \
+  -target=google_service_account.runtime \
+  -target=google_service_account_iam_member.deployer_wif \
+  -target=google_service_account_iam_member.deployer_actas_runtime \
+  -target=google_artifact_registry_repository_iam_member.deployer_ar_writer \
+  -target=google_secret_manager_secret_iam_member.deployer_postgres_password_access
+```
+
+### 7. Upload secret values
+
+Terraform creates only the secret containers. Add the values by hand. Each command reads the value without echoing it, so it never appears in shell history; paste the value and press Enter.
+
+```sh
+for secret in POSTGRES_PASSWORD VALKEY_PASSWORD CLOUDFLARE_API_TOKEN OTP_SECRET_KEY; do
+  printf '%s: ' "$secret"
+  read -rs value && printf '%s' "$value" | gcloud secrets versions add "$secret" --data-file=-
+  unset value
+done
+```
+
+`EDDSA_PRIVATE_KEY` can span several lines, which `read` cannot take. Add it from a file kept outside the repository, then delete the file:
+
+```sh
+gcloud secrets versions add EDDSA_PRIVATE_KEY --data-file=<path outside the repository>
+```
+
+### 8. Point `vinoguessr-api`'s deploy workflow at the new project
+
+In `vinoguessr/vinoguessr-api` → Settings → Secrets and variables → Actions → **Variables** (WIF settings are not secret):
+
+| Variable | Source |
+|---|---|
+| `GOOGLE_CLOUD_PROJECT` | `project_id` in `terraform.tfvars` |
+| `GOOGLE_CLOUD_REGION` | `region` in `terraform.tfvars` |
+| `GOOGLE_CLOUD_SERVICE_NAME` | `service_name` in `terraform.tfvars` (default `vinoguessr-api`) |
+| `GOOGLE_CLOUD_ARTIFACT_REPO` | `artifact_repo_id` in `terraform.tfvars` (default `vinoguessr-api`) |
+| `GOOGLE_CLOUD_WIF_PROVIDER` | `terraform output -raw wif_provider` |
+| `GOOGLE_CLOUD_DEPLOYER_SA` | `terraform output -raw deployer_sa_email` |
+
+The Deploy workflow also applies Atlas migrations with `POSTGRES_HOSTNAME`, `POSTGRES_USER`, `POSTGRES_DB`, and `ATLAS_BASELINE_VERSION`, and reads `POSTGRES_PASSWORD` from Secret Manager. They must point at the same database as `app_env` in `terraform.tfvars`. When reusing the existing database, keep them as they are. For a new, empty database, update them and remove `ATLAS_BASELINE_VERSION`, so Atlas applies the baseline migration instead of skipping it.
+
+### 9. Push the first image
+
+The Deploy workflow has no manual trigger: it runs on a push to `main` of `vinoguessr-api` and on its daily schedule (21:00 UTC). The next run builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its final `gcloud run services update` step fails because the service does not exist yet. That failure is expected until step 10.
+
+From step 8 on, every Deploy run targets the new project, and the old project no longer receives deploys.
+
+Set `image_tag` in `terraform.tfvars` to the full 40-character commit SHA of that run (`github.sha`).
+
+### 10. Apply everything with direct ingress open
+
+The first full apply creates Cloud Run, the load balancer, Cloud Armor, Certificate Manager, and the Cloudflare DNS records. Add this to `terraform.tfvars` temporarily so the service is reachable while the certificate is issued. If an `api.vinoguessr.com` record already exists in Cloudflare, delete or import it first.
+
+```hcl
+restrict_direct_cloud_run_ingress = false
+```
+
+```sh
+terraform apply
+terraform output -raw api_health_url
+```
+
+Wait until the certificate and the certificate map entry are `ACTIVE` and `https://api.vinoguessr.com/health` returns 200. Issuance can take from a few minutes to an hour.
+
+### 11. Restrict direct ingress
+
+Remove `restrict_direct_cloud_run_ingress = false` from `terraform.tfvars` and apply again. Leaving direct ingress open with `allow_unauthenticated = true` lets requests bypass Cloudflare and Cloud Armor, so `CF-Connecting-IP` can no longer be trusted.
+
+```sh
+terraform apply
+```
+
+`https://api.vinoguessr.com` keeps working, and direct `*.run.app` access is rejected by Cloud Run ingress. From now on, `vinoguessr-api`'s Deploy workflow rolls out new images.
+
+## Day-to-day operations
+
+### Configuration changes
+
+Change Cloud Run environment variables, scaling, resources, or the OTel Collector configuration in `terraform.tfvars`, `*.tf`, or `otel/collector-config.yaml`, and run `terraform apply` after approval. This is independent of image rollouts, because Terraform ignores the app image.
+
+A change to `otel/collector-config.yaml` creates a new Secret Manager version, and Cloud Run mounts that exact version, so the apply rolls out a new revision whose Collector starts with the new configuration. Old versions are kept (`deletion_policy = "ABANDON"`) so earlier revisions can still start; disable them by hand once no revision uses them.
+
+### Updating providers
+
+The shared Terraform workflow runs `terraform init -lockfile=readonly` on Linux, so the lockfile must already contain hashes for every platform that runs Terraform. After changing provider versions, regenerate it:
+
+```sh
+terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64
+```
+
+### Rotating a secret
+
+```sh
+read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
+```
+
+App secrets reference `version = "latest"`, so the next revision reads the new value. To apply it immediately, run the Deploy workflow or create a revision with a no-op update such as `gcloud run services update vinoguessr-api --region=$REGION --update-env-vars=_DUMMY=$(date +%s)`.
+
+### Rolling back the image
+
+With `PROJECT_ID` and `REGION` exported as in step 0:
+
+```sh
+gcloud run services update vinoguessr-api \
+  --region="$REGION" \
+  --image="$REGION-docker.pkg.dev/$PROJECT_ID/vinoguessr-api/vinoguessr-api:<OLD_SHA>"
+```
+
+<!-- vinoguessr-foundation -->
+## Scope
+
+Infrastructure code: Terraform / Google Cloud Run / Cloudflare / OpenTelemetry.
+
+## Architecture
+
+The VinoGuessr API and PostgreSQL are the source of truth for business data. Never expose credentials in Terraform state, plans, logs, or the repository. `vinoguessr-api`'s GitHub Actions builds container images and rolls them out to Cloud Run, and Terraform ignores drift in the running image.
+
+## Verification
+
+After implementing, run `terraform fmt -check -recursive` / `terraform init -backend=false` / `terraform validate`. Do not run apply, production deploys, billed resource creation, or broad IAM grants without explicit approval.
+
+Follow [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md): satisfy the Issue's dependencies, then implement with an independent Review Agent running in parallel. Shared rules source: [vinoguessr/.github@01fd9c61bce2](https://github.com/vinoguessr/.github/tree/01fd9c61bce2139beb8ea173339d45c02d49b69f).
