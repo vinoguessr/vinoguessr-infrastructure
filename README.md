@@ -20,7 +20,6 @@ These steps build the environment in an empty project (`vinoguessr`). Run every 
 Before starting:
 
 - Link a billing account to the project.
-- Note the project number for `project_number` in `terraform.tfvars`: `gcloud projects describe vinoguessr --format='value(projectNumber)'`.
 - If the project belongs to an organization, an organization policy such as `iam.allowedPolicyMemberDomains` can reject the `allUsers` Cloud Run invoker binding. Check the policies before step 10.
 
 ### 0. Shell variables
@@ -79,7 +78,7 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Set `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
+Set `project_number` to the output of `gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)'`, and `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
 
 Terraform does not change Cloudflare's SSL/TLS mode. Confirm it is `Full (strict)` in the Cloudflare dashboard before publishing `api.vinoguessr.com`.
 
@@ -160,14 +159,16 @@ It builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its f
 
 From step 8 on, every Deploy run (a push to `main`, the daily 21:00 UTC schedule, or a manual run) targets the new project, and the old project no longer receives deploys.
 
-Wait until that run has finished, then set `image_tag` in `terraform.tfvars` to its full 40-character commit SHA (`github.sha`). Filter by event so the newest push or scheduled run is not picked up instead:
+Wait until that run has finished. Filter by event so the newest push or scheduled run is not picked up instead, then list its steps:
 
 ```sh
 gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --event workflow_dispatch --branch main \
-  --limit 1 --json headSha,status,conclusion
+  --limit 1 --json databaseId,headSha,url
+gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
+  --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
 ```
 
-Use it only if that run's "Build and push image" step succeeded.
+Every step except "Update Cloud Run service image" must have succeeded; in particular, a failed "Apply database migrations" means step 8's database variables are wrong, and Cloud Run would start against an unmigrated database. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
 
 ### 10. Apply everything with direct ingress open
 
@@ -224,6 +225,8 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 ```
 
 ### Rotating a secret
+
+Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Paste any other secret without echoing it:
 
 ```sh
 read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
