@@ -118,7 +118,9 @@ resource "google_cloud_run_v2_service" "api" {
         secret = google_secret_manager_secret.otel_collector_config.secret_id
 
         items {
-          version = "latest"
+          # Not "latest": the Collector reads its config only at startup, so a config-only
+          # change must produce a new revision. Referencing the managed version does that.
+          version = google_secret_manager_secret_version.otel_collector_config.version
           path    = "config.yaml"
         }
       }

@@ -44,6 +44,10 @@ resource "google_secret_manager_secret" "otel_collector_config" {
 resource "google_secret_manager_secret_version" "otel_collector_config" {
   secret      = google_secret_manager_secret.otel_collector_config.id
   secret_data = file("${path.module}/otel/collector-config.yaml")
+
+  # Not DELETE: Cloud Run revisions pin a specific version, so deleting the old one on a
+  # config change would break rollbacks and instances that start mid-rollout.
+  deletion_policy = "ABANDON"
 }
 
 resource "google_secret_manager_secret_iam_member" "otel_collector_config_runtime_access" {
