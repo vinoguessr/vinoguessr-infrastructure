@@ -1,4 +1,6 @@
+# VinoGuessr foundation baseline (vinoguessr/.github)
 .DS_Store
+__pycache__/
 .env
 .env.*
 !.env.example
