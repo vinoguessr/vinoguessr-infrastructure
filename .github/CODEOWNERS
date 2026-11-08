@@ -1,0 +1,2 @@
+# Explicitly copy to each repository; CODEOWNERS is not inherited.
+* @zunda-pixel

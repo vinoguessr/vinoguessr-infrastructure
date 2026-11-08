@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security reporting
+    url: https://github.com/vinoguessr/.github/blob/main/SECURITY.md
+    about: Do not disclose vulnerabilities, secrets, or personal data in public issues.
