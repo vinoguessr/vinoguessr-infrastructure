@@ -302,5 +302,7 @@ resource "cloudflare_dns_record" "site" {
   content = google_compute_global_address.api.address
   ttl     = 1
   proxied = true
-  comment = "Routes ${var.site_hostname} to the Google external HTTPS load balancer (passkey association file only until vinoguessr-web is deployed)."
+  # Cloudflare rejects comments over 100 characters (error 9313) on the Free plan.
+  # Until vinoguessr-web is deployed, the load balancer serves only the passkey association file here.
+  comment = "Routes ${var.site_hostname} to the Google external HTTPS load balancer."
 }
