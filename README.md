@@ -232,7 +232,13 @@ Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step
 read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
 ```
 
-App secrets reference `version = "latest"`, and Cloud Run resolves it when each instance starts, not per revision. Until every instance is replaced, newly started instances use the new value while running ones keep the old one; for `EDDSA_PRIVATE_KEY`, tokens then fail depending on which instance serves the request. So right after adding the version, always roll out a new revision: run the Deploy workflow (`gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`) or make a no-op update such as `gcloud run services update vinoguessr-api --region=$REGION --update-env-vars=_DUMMY=$(date +%s)`.
+App secrets reference `version = "latest"`, and Cloud Run resolves it when each instance starts, not per revision. Until every instance is replaced, newly started instances use the new value while running ones keep the old one; for `EDDSA_PRIVATE_KEY`, tokens then fail depending on which instance serves the request. So right after adding the version, always roll out a new revision with a no-op update. It keeps the running image and waits until the new revision serves traffic:
+
+```sh
+gcloud run services update vinoguessr-api --region="$REGION" --update-env-vars=SECRET_ROTATED_AT="$(date +%s)"
+```
+
+The next `terraform apply` removes `SECRET_ROTATED_AT` again, which rolls out one more revision with the same values. Prefer this over the Deploy workflow, which redeploys `main` and runs migrations first, and rolls out nothing if either fails.
 
 ### Rolling back the image
 
