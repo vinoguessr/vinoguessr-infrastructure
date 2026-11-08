@@ -160,11 +160,14 @@ It builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its f
 
 From step 8 on, every Deploy run (a push to `main`, the daily 21:00 UTC schedule, or a manual run) targets the new project, and the old project no longer receives deploys.
 
-Set `image_tag` in `terraform.tfvars` to the full 40-character commit SHA of that run (`github.sha`):
+Wait until that run has finished, then set `image_tag` in `terraform.tfvars` to its full 40-character commit SHA (`github.sha`). Filter by event so the newest push or scheduled run is not picked up instead:
 
 ```sh
-gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --limit 1 --json headSha --jq '.[0].headSha'
+gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --event workflow_dispatch --branch main \
+  --limit 1 --json headSha,status,conclusion
 ```
+
+Use it only if that run's "Build and push image" step succeeded.
 
 ### 10. Apply everything with direct ingress open
 
@@ -204,6 +207,8 @@ terraform apply
 
 ## Day-to-day operations
 
+Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token.
+
 ### Configuration changes
 
 Change Cloud Run environment variables, scaling, resources, or the OTel Collector configuration in `terraform.tfvars`, `*.tf`, or `otel/collector-config.yaml`, and run `terraform apply` after approval. This is independent of image rollouts, because Terraform ignores the app image.
@@ -228,7 +233,7 @@ App secrets reference `version = "latest"`, so the next revision reads the new v
 
 ### Rolling back the image
 
-With `PROJECT_ID` and `REGION` exported as in step 0:
+With step 0 and the last three lines of step 1 run in this terminal:
 
 ```sh
 gcloud run services update vinoguessr-api \
