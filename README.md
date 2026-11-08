@@ -43,10 +43,10 @@ gcloud config configurations create "$PROJECT_ID" --no-activate  # first time on
 gcloud auth login --configuration="$PROJECT_ID"                   # first time only
 export CLOUDSDK_ACTIVE_CONFIG_NAME="$PROJECT_ID"
 gcloud config set project "$PROJECT_ID"
-export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud config config-helper --force-auth-refresh --format='value(credential.access_token)')"
 ```
 
-The token expires after an hour; export it again before a later `terraform` command. When you resume in a new terminal, run step 0 and the last three lines here again.
+`--force-auth-refresh` mints a new token valid for an hour; `gcloud auth print-access-token` would return a cached one that may expire within minutes, in the middle of an apply. Export it again right before each later `terraform` command. When you resume in a new terminal, run step 0 and the last three lines here again.
 
 ### 2. Enable the APIs Terraform needs to start
 
@@ -168,7 +168,7 @@ gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
   --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
 ```
 
-Every step except "Update Cloud Run service image" must have succeeded; in particular, a failed "Apply database migrations" means step 8's database variables are wrong, and Cloud Run would start against an unmigrated database. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
+"Build and push image" and "Apply database migrations" must be `success`; "Require main" is `skipped` on main, and "Update Cloud Run service image" fails as expected. A failed migration means the database is unreachable or step 7's `POSTGRES_PASSWORD` or step 8's database variables are wrong, and Cloud Run would start against an unmigrated database, so fix it and run the workflow again. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
 
 ### 10. Apply everything with direct ingress open
 
@@ -208,7 +208,7 @@ terraform apply
 
 ## Day-to-day operations
 
-Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token.
+Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token. Refresh the token before each `terraform` command that may run long.
 
 ### Configuration changes
 
