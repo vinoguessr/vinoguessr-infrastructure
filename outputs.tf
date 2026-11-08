@@ -8,6 +8,11 @@ output "api_health_url" {
   value       = "https://${var.api_hostname}/health"
 }
 
+output "site_association_url" {
+  description = "apple-app-site-association for the passkey relying party (ADR-0005), served by the API."
+  value       = "https://${var.site_hostname}/.well-known/apple-app-site-association"
+}
+
 output "api_hostname" {
   description = "Public hostname served through Cloudflare and the Google external HTTPS load balancer."
   value       = var.api_hostname

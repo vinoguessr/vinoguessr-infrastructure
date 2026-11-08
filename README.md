@@ -10,6 +10,7 @@ Terraform for the VinoGuessr production environment: Cloud Run, Artifact Registr
 - **Environment**: production only.
 - **Observability**: an OpenTelemetry Collector sidecar on Cloud Run. Its configuration (`otel/collector-config.yaml`) is not secret and is stored as a Secret Manager version by Terraform.
 - **Public path**: `api.vinoguessr.com` is a Cloudflare proxied DNS record → Google global external HTTPS Load Balancer → Cloud Run serverless NEG. Cloud Armor allows only Cloudflare proxy IPs.
+- **Passkey relying party**: `vinoguessr.com` is the passkey RP ID (ADR-0005). The same load balancer serves it, routing only `/.well-known/apple-app-site-association` to the API, which generates it from `APPLE_APP_ID`; every other path on `vinoguessr.com` returns 404 until vinoguessr-web is deployed behind that host.
 - **Exposure**: `allow_unauthenticated = true` stays on. With `restrict_direct_cloud_run_ingress = true` (the default), Cloud Run accepts traffic only through the load balancer and rejects direct `*.run.app` access.
 
 ## Bootstrapping a new project
@@ -147,7 +148,7 @@ Set `image_tag` in `terraform.tfvars` to the full 40-character commit SHA of tha
 
 ### 10. Apply everything with direct ingress open
 
-The first full apply creates Cloud Run, the load balancer, Cloud Armor, Certificate Manager, and the Cloudflare DNS records. Add this to `terraform.tfvars` temporarily so the service is reachable while the certificate is issued. If an `api.vinoguessr.com` record already exists in Cloudflare, delete or import it first.
+The first full apply creates Cloud Run, the load balancer, Cloud Armor, Certificate Manager, and the Cloudflare DNS records for `api.vinoguessr.com` and `vinoguessr.com`. Add this to `terraform.tfvars` temporarily so the service is reachable while the certificates are issued. If an `api.vinoguessr.com` or `vinoguessr.com` record already exists in Cloudflare, delete or import it first.
 
 ```hcl
 restrict_direct_cloud_run_ingress = false
@@ -158,7 +159,12 @@ terraform apply
 terraform output -raw api_health_url
 ```
 
-Wait until the certificate and the certificate map entry are `ACTIVE` and `https://api.vinoguessr.com/health` returns 200. Issuance can take from a few minutes to an hour.
+Wait until both certificates and certificate map entries are `ACTIVE`, `https://api.vinoguessr.com/health` returns 200, and the association file is served without a redirect (Apple does not follow redirects for it). Issuance can take from a few minutes to an hour.
+
+```sh
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "$(terraform output -raw site_association_url)"  # expect 200 application/json
+curl -sS -o /dev/null -w '%{http_code}\n' https://vinoguessr.com/                                          # expect 404
+```
 
 ### 11. Restrict direct ingress
 
