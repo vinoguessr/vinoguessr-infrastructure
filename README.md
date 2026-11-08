@@ -20,7 +20,6 @@ These steps build the environment in an empty project (`vinoguessr`). Run every 
 Before starting:
 
 - Link a billing account to the project.
-- Note the project number for `project_number` in `terraform.tfvars`: `gcloud projects describe vinoguessr --format='value(projectNumber)'`.
 - If the project belongs to an organization, an organization policy such as `iam.allowedPolicyMemberDomains` can reject the `allUsers` Cloud Run invoker binding. Check the policies before step 10.
 
 ### 0. Shell variables
@@ -35,13 +34,19 @@ export STATE_BUCKET="${PROJECT_ID}-tfstate"
 read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
 ```
 
-### 1. Authenticate as a project Owner/Editor
+### 1. Authenticate as a project Owner
+
+Use a dedicated gcloud configuration, so other accounts and their Application Default Credentials stay untouched, and hand Terraform a short-lived access token from it. The Google provider and the GCS backend both read `GOOGLE_OAUTH_ACCESS_TOKEN`.
 
 ```sh
-gcloud auth login
-gcloud auth application-default login
+gcloud config configurations create "$PROJECT_ID" --no-activate  # first time only
+gcloud auth login --configuration="$PROJECT_ID"                   # first time only
+export CLOUDSDK_ACTIVE_CONFIG_NAME="$PROJECT_ID"
 gcloud config set project "$PROJECT_ID"
+export GOOGLE_OAUTH_ACCESS_TOKEN="$(gcloud config config-helper --force-auth-refresh --format='value(credential.access_token)')"
 ```
+
+`--force-auth-refresh` mints a new token valid for an hour; `gcloud auth print-access-token` would return a cached one that may expire within minutes, in the middle of an apply. Export it again right before each later `terraform` command. When you resume in a new terminal, run step 0 and the last three lines here again.
 
 ### 2. Enable the APIs Terraform needs to start
 
@@ -61,7 +66,8 @@ Bucket names are globally unique; `<PROJECT_ID>-tfstate` rarely collides.
 ```sh
 gcloud storage buckets create "gs://$STATE_BUCKET" \
   --location="$REGION" \
-  --uniform-bucket-level-access
+  --uniform-bucket-level-access \
+  --public-access-prevention
 gcloud storage buckets update "gs://$STATE_BUCKET" --versioning
 ```
 
@@ -72,7 +78,7 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Set `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
+Set `project_number` to the output of `gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)'`, and `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
 
 Terraform does not change Cloudflare's SSL/TLS mode. Confirm it is `Full (strict)` in the Cloudflare dashboard before publishing `api.vinoguessr.com`.
 
@@ -107,20 +113,23 @@ terraform apply \
 
 ### 7. Upload secret values
 
-Terraform creates only the secret containers. Add the values by hand. Each command reads the value without echoing it, so it never appears in shell history; paste the value and press Enter.
+Terraform creates only the secret containers. Add the values by hand without echoing them, so they never appear on screen or in shell history.
+
+Generate the two keys rather than copying them from another environment. `OTP_SECRET_KEY` is a Base64 32-byte HMAC key; `EDDSA_PRIVATE_KEY` is an unpadded Base64URL 32-byte Ed25519 private key on a single line.
 
 ```sh
-for secret in POSTGRES_PASSWORD VALKEY_PASSWORD CLOUDFLARE_API_TOKEN OTP_SECRET_KEY; do
+openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add OTP_SECRET_KEY --data-file=-
+openssl rand 32 | base64 | tr '+/' '-_' | tr -d '=\n' | gcloud secrets versions add EDDSA_PRIVATE_KEY --data-file=-
+```
+
+For the rest, paste each value and press Enter:
+
+```sh
+for secret in POSTGRES_PASSWORD VALKEY_PASSWORD CLOUDFLARE_API_TOKEN; do
   printf '%s: ' "$secret"
   read -rs value && printf '%s' "$value" | gcloud secrets versions add "$secret" --data-file=-
   unset value
 done
-```
-
-`EDDSA_PRIVATE_KEY` can span several lines, which `read` cannot take. Add it from a file kept outside the repository, then delete the file:
-
-```sh
-gcloud secrets versions add EDDSA_PRIVATE_KEY --data-file=<path outside the repository>
 ```
 
 ### 8. Point `vinoguessr-api`'s deploy workflow at the new project
@@ -140,11 +149,26 @@ The Deploy workflow also applies Atlas migrations with `POSTGRES_HOSTNAME`, `POS
 
 ### 9. Push the first image
 
-The Deploy workflow has no manual trigger: it runs on a push to `main` of `vinoguessr-api` and on its daily schedule (21:00 UTC). The next run builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its final `gcloud run services update` step fails because the service does not exist yet. That failure is expected until step 10.
+Run the Deploy workflow on `main` of `vinoguessr-api`:
 
-From step 8 on, every Deploy run targets the new project, and the old project no longer receives deploys.
+```sh
+gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main
+```
 
-Set `image_tag` in `terraform.tfvars` to the full 40-character commit SHA of that run (`github.sha`).
+It builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its final `gcloud run services update` step fails because the service does not exist yet. That failure is expected until step 10.
+
+From step 8 on, every Deploy run (a push to `main`, the daily 21:00 UTC schedule, or a manual run) targets the new project, and the old project no longer receives deploys.
+
+Wait until that run has finished. Filter by event so the newest push or scheduled run is not picked up instead, then list its steps:
+
+```sh
+gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --event workflow_dispatch --branch main \
+  --limit 1 --json databaseId,headSha,url
+gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
+  --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
+```
+
+"Build and push image" and "Apply database migrations" must be `success`; "Require main" is `skipped` on main, and "Update Cloud Run service image" fails as expected. A failed migration means the database is unreachable or step 7's `POSTGRES_PASSWORD` or step 8's database variables are wrong, and Cloud Run would start against an unmigrated database, so fix it and run the workflow again. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
 
 ### 10. Apply everything with direct ingress open
 
@@ -184,6 +208,8 @@ terraform apply
 
 ## Day-to-day operations
 
+Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token. Refresh the token right before each `terraform` command.
+
 ### Configuration changes
 
 Change Cloud Run environment variables, scaling, resources, or the OTel Collector configuration in `terraform.tfvars`, `*.tf`, or `otel/collector-config.yaml`, and run `terraform apply` after approval. This is independent of image rollouts, because Terraform ignores the app image.
@@ -200,15 +226,23 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 
 ### Rotating a secret
 
+Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Paste any other secret without echoing it:
+
 ```sh
 read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
 ```
 
-App secrets reference `version = "latest"`, so the next revision reads the new value. To apply it immediately, run the Deploy workflow or create a revision with a no-op update such as `gcloud run services update vinoguessr-api --region=$REGION --update-env-vars=_DUMMY=$(date +%s)`.
+App secrets reference `version = "latest"`, and Cloud Run resolves it when each instance starts, not per revision. Until every instance is replaced, newly started instances use the new value while running ones keep the old one; for `EDDSA_PRIVATE_KEY`, tokens then fail depending on which instance serves the request. So right after adding the version, always roll out a new revision with a no-op update. It keeps the running image and waits until the new revision serves traffic:
+
+```sh
+gcloud run services update vinoguessr-api --region="$REGION" --update-env-vars=SECRET_ROTATED_AT="$(date +%s)"
+```
+
+The next `terraform apply` removes `SECRET_ROTATED_AT` again, which rolls out one more revision with the same values. Prefer this over the Deploy workflow, which redeploys `main` and runs migrations first, and rolls out nothing if either fails.
 
 ### Rolling back the image
 
-With `PROJECT_ID` and `REGION` exported as in step 0:
+With step 0 and the last three lines of step 1 run in this terminal:
 
 ```sh
 gcloud run services update vinoguessr-api \
