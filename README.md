@@ -5,7 +5,7 @@ Terraform for the VinoGuessr production environment: Cloud Run, Artifact Registr
 ## How it fits together
 
 - **Images and rollouts**: `vinoguessr-api`'s GitHub Actions builds the image, pushes it to Artifact Registry, applies Atlas migrations, and runs `gcloud run services update --image=...`. Terraform ignores drift in the running image.
-- **Authentication**: Workload Identity Federation. No long-lived JSON keys. Only runs from the `main` branch of `vinoguessr/vinoguessr-api` can impersonate the deployer service account.
+- **Authentication**: Workload Identity Federation. No long-lived JSON keys. Only the Deploy workflow (`.github/workflows/deploy.yml`) running on the `main` branch of `vinoguessr/vinoguessr-api`, checked by repository name, repository ID, and owner ID, can impersonate the deployer service account.
 - **Running Terraform**: locally by the owner, after explicit approval. GitHub Actions never runs `terraform apply`; PRs run only `fmt` / `init -backend=false` / `validate`.
 - **Environment**: production only.
 - **Observability**: an OpenTelemetry Collector sidecar on Cloud Run. Its configuration (`otel/collector-config.yaml`) is not secret and is stored as a Secret Manager version by Terraform.
@@ -16,6 +16,12 @@ Terraform for the VinoGuessr production environment: Cloud Run, Artifact Registr
 
 These steps build the environment in an empty project (`vinoguessr`). Run every `terraform apply` only after the owner approves it.
 
+Before starting:
+
+- Link a billing account to the project.
+- Note the project number for `project_number` in `terraform.tfvars`: `gcloud projects describe vinoguessr --format='value(projectNumber)'`.
+- If the project belongs to an organization, an organization policy such as `iam.allowedPolicyMemberDomains` can reject the `allUsers` Cloud Run invoker binding. Check the policies before step 10.
+
 ### 0. Shell variables
 
 Export these first; when you resume in a new terminal, start here again.
@@ -24,7 +30,8 @@ Export these first; when you resume in a new terminal, start here again.
 export PROJECT_ID="vinoguessr"
 export REGION="asia-northeast1"
 export STATE_BUCKET="${PROJECT_ID}-tfstate"
-export CLOUDFLARE_API_TOKEN="<token with DNS edit access to vinoguessr.com>"
+# Token with DNS edit access to vinoguessr.com; read it without echoing so it stays out of shell history.
+read -rs CLOUDFLARE_API_TOKEN && export CLOUDFLARE_API_TOKEN
 ```
 
 ### 1. Authenticate as a project Owner/Editor
@@ -99,14 +106,20 @@ terraform apply \
 
 ### 7. Upload secret values
 
-Terraform creates only the secret containers. Add the values by hand.
+Terraform creates only the secret containers. Add the values by hand. Each command reads the value without echoing it, so it never appears in shell history; paste the value and press Enter.
 
 ```sh
-printf '%s' "<POSTGRES_PASSWORD_VALUE>"    | gcloud secrets versions add POSTGRES_PASSWORD    --data-file=-
-printf '%s' "<VALKEY_PASSWORD_VALUE>"      | gcloud secrets versions add VALKEY_PASSWORD      --data-file=-
-printf '%s' "<EDDSA_PRIVATE_KEY_VALUE>"    | gcloud secrets versions add EDDSA_PRIVATE_KEY    --data-file=-
-printf '%s' "<CLOUDFLARE_API_TOKEN_VALUE>" | gcloud secrets versions add CLOUDFLARE_API_TOKEN --data-file=-
-printf '%s' "<OTP_SECRET_KEY_VALUE>"       | gcloud secrets versions add OTP_SECRET_KEY       --data-file=-
+for secret in POSTGRES_PASSWORD VALKEY_PASSWORD CLOUDFLARE_API_TOKEN OTP_SECRET_KEY; do
+  printf '%s: ' "$secret"
+  read -rs value && printf '%s' "$value" | gcloud secrets versions add "$secret" --data-file=-
+  unset value
+done
+```
+
+`EDDSA_PRIVATE_KEY` can span several lines, which `read` cannot take. Add it from a file kept outside the repository, then delete the file:
+
+```sh
+gcloud secrets versions add EDDSA_PRIVATE_KEY --data-file=<path outside the repository>
 ```
 
 ### 8. Point `vinoguessr-api`'s deploy workflow at the new project
@@ -122,11 +135,15 @@ In `vinoguessr/vinoguessr-api` → Settings → Secrets and variables → Action
 | `GOOGLE_CLOUD_WIF_PROVIDER` | `terraform output -raw wif_provider` |
 | `GOOGLE_CLOUD_DEPLOYER_SA` | `terraform output -raw deployer_sa_email` |
 
+The Deploy workflow also applies Atlas migrations with `POSTGRES_HOSTNAME`, `POSTGRES_USER`, `POSTGRES_DB`, and `ATLAS_BASELINE_VERSION`, and reads `POSTGRES_PASSWORD` from Secret Manager. They must point at the same database as `app_env` in `terraform.tfvars`. When reusing the existing database, keep them as they are. For a new, empty database, update them and remove `ATLAS_BASELINE_VERSION`, so Atlas applies the baseline migration instead of skipping it.
+
 ### 9. Push the first image
 
-Run `vinoguessr-api`'s Deploy workflow (it runs on pushes to `main` and on its schedule). It builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its final `gcloud run services update` step fails because the service does not exist yet. That failure is expected on this run only.
+The Deploy workflow has no manual trigger: it runs on a push to `main` of `vinoguessr-api` and on its daily schedule (21:00 UTC). The next run builds and pushes `vinoguessr-api:<commit SHA>` and applies migrations; its final `gcloud run services update` step fails because the service does not exist yet. That failure is expected until step 10.
 
-Set `image_tag` in `terraform.tfvars` to that commit SHA.
+From step 8 on, every Deploy run targets the new project, and the old project no longer receives deploys.
+
+Set `image_tag` in `terraform.tfvars` to the full 40-character commit SHA of that run (`github.sha`).
 
 ### 10. Apply everything with direct ingress open
 
@@ -161,10 +178,18 @@ Change Cloud Run environment variables, scaling, resources, or the OTel Collecto
 
 A change to `otel/collector-config.yaml` creates a new Secret Manager version, and Cloud Run mounts that exact version, so the apply rolls out a new revision whose Collector starts with the new configuration. Old versions are kept (`deletion_policy = "ABANDON"`) so earlier revisions can still start; disable them by hand once no revision uses them.
 
+### Updating providers
+
+The shared Terraform workflow runs `terraform init -lockfile=readonly` on Linux, so the lockfile must already contain hashes for every platform that runs Terraform. After changing provider versions, regenerate it:
+
+```sh
+terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=darwin_amd64
+```
+
 ### Rotating a secret
 
 ```sh
-printf '%s' "<new>" | gcloud secrets versions add <secret-id> --data-file=-
+read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
 ```
 
 App secrets reference `version = "latest"`, so the next revision reads the new value. To apply it immediately, run the Deploy workflow or create a revision with a no-op update such as `gcloud run services update vinoguessr-api --region=$REGION --update-env-vars=_DUMMY=$(date +%s)`.

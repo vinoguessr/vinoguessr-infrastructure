@@ -15,6 +15,6 @@ terraform {
 
   backend "gcs" {
     # bucket and prefix are supplied via `terraform init -backend-config=...`.
-    # See Terraform/README.md §5 for the exact init command.
+    # See README.md step 5 for the exact init command.
   }
 }

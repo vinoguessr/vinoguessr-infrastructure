@@ -1,6 +1,6 @@
-# Used by Terraform/secrets.tf (google_secret_manager_secret_version.otel_collector_config),
-# which uploads this file as a Secret Manager version. Cloud Run mounts that secret into the
-# collector sidecar at /etc/otelcol-google/config.yaml (see Terraform/cloud_run.tf).
+# Used by secrets.tf (google_secret_manager_secret_version.otel_collector_config), which
+# uploads this file as a Secret Manager version. Cloud Run mounts that exact version into the
+# collector sidecar at /etc/otelcol-google/config.yaml (see cloud_run.tf).
 receivers:
   otlp:
     protocols:

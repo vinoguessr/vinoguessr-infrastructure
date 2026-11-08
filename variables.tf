@@ -44,6 +44,34 @@ variable "cloudflare_zone_id" {
   sensitive   = true
 }
 
+variable "github_repository_id" {
+  description = "Numeric ID of var.github_repo (`gh api repos/<owner>/<name> --jq .id`)."
+  type        = string
+  default     = "1047706119"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_id))
+    error_message = "github_repository_id must be the numeric repository ID."
+  }
+}
+
+variable "github_repository_owner_id" {
+  description = "Numeric ID of the owner of var.github_repo (`gh api repos/<owner>/<name> --jq .owner.id`)."
+  type        = string
+  default     = "350685173"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.github_repository_owner_id))
+    error_message = "github_repository_owner_id must be the numeric owner ID."
+  }
+}
+
+variable "deploy_workflow" {
+  description = "Path of the only workflow in var.github_repo allowed to mint deployer tokens."
+  type        = string
+  default     = ".github/workflows/deploy.yml"
+}
+
 variable "deploy_branch" {
   description = "Git ref allowed to mint deployer tokens via Workload Identity Federation."
   type        = string
@@ -67,9 +95,13 @@ variable "github_repo" {
 }
 
 variable "image_tag" {
-  description = "Initial image tag used on `terraform apply`. After first apply, GitHub Actions updates the running tag; Terraform ignores image drift."
+  description = "Image tag (the full commit SHA pushed by vinoguessr-api's Deploy workflow) used when Cloud Run is first created. After that, GitHub Actions updates the running image; Terraform ignores image drift."
   type        = string
-  default     = "bootstrap"
+
+  validation {
+    condition     = can(regex("^[0-9a-f]{40}$", var.image_tag))
+    error_message = "image_tag must be the full 40-character commit SHA of an image that already exists in Artifact Registry."
+  }
 }
 
 variable "max_instance_count" {
