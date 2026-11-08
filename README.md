@@ -71,7 +71,7 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Set `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
+Set `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
 
 Terraform does not change Cloudflare's SSL/TLS mode. Confirm it is `Full (strict)` in the Cloudflare dashboard before publishing `api.vinoguessr.com`.
 
