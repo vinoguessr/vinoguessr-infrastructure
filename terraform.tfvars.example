@@ -9,6 +9,7 @@ cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
 
 # Optional overrides (defaults are fine for a single-service prod setup)
 # api_hostname       = "api.vinoguessr.com"
+# site_hostname      = "vinoguessr.com"
 # service_name       = "vinoguessr-api"
 # artifact_repo_id   = "vinoguessr-api"
 # github_repo        = "vinoguessr/vinoguessr-api"
@@ -42,13 +43,13 @@ image_tag = "<commit SHA pushed by the vinoguessr-api Deploy workflow>"
 # OTel SDK transport settings (exporter, protocol, endpoint) are not injected:
 # the swift-otel defaults match the Cloud Run sidecar collector setup, and
 # OTel resource attributes live in the app code.
-# RELYING_PARTY_ORIGIN should be the public-facing origin (custom domain or
-# Cloud Run URL), NOT a placeholder.
+# The passkey relying party is vinoguessr.com (ADR-0005): the app reports its origin as
+# https://<RP ID>, and vinoguessr-web will be served there too. These values are not secret.
 app_env = {
-  APPLE_APP_ID                   = "XXXXXXXX.com.example.app"
-  RELYING_PARTY_ID               = "example.com"
-  RELYING_PARTY_NAME             = "Example"
-  RELYING_PARTY_ORIGIN           = "https://example.com" # REQUIRED: replace with the public-facing origin (custom domain or Cloud Run URL); WebAuthn fails if this is wrong.
+  APPLE_APP_ID                   = "PU5HXZ4FZ2.com.vinoguessr.app"
+  RELYING_PARTY_ID               = "vinoguessr.com"
+  RELYING_PARTY_NAME             = "VinoGuessr"
+  RELYING_PARTY_ORIGIN           = "https://vinoguessr.com"
   POSTGRES_HOSTNAME              = "db.example.com"
   POSTGRES_USER                  = "vinoguessr"
   POSTGRES_DB                    = "vinoguessr"

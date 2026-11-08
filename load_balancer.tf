@@ -90,7 +90,7 @@ resource "google_compute_url_map" "api" {
   depends_on = [google_project_service.required]
 
   name            = "${var.service_name}-url-map"
-  description     = "Routes ${var.api_hostname} to Cloud Run."
+  description     = "Routes ${var.api_hostname} and the association file on ${var.site_hostname} to Cloud Run."
   default_service = google_compute_backend_service.api.id
 
   host_rule {
@@ -101,6 +101,33 @@ resource "google_compute_url_map" "api" {
   path_matcher {
     name            = "api"
     default_service = google_compute_backend_service.api.id
+  }
+
+  # The passkey relying party (ADR-0005). The API generates the association file from
+  # APPLE_APP_ID, so only that path reaches it; everything else on this host returns 404
+  # instead of exposing the API, until vinoguessr-web is deployed behind this host.
+  host_rule {
+    hosts        = [var.site_hostname]
+    path_matcher = "site"
+  }
+
+  path_matcher {
+    name            = "site"
+    default_service = google_compute_backend_service.api.id
+
+    default_route_action {
+      fault_injection_policy {
+        abort {
+          http_status = 404
+          percentage  = 100
+        }
+      }
+    }
+
+    path_rule {
+      paths   = ["/.well-known/apple-app-site-association"]
+      service = google_compute_backend_service.api.id
+    }
   }
 }
 
@@ -155,6 +182,44 @@ resource "google_certificate_manager_certificate" "api" {
   }
 }
 
+resource "google_certificate_manager_dns_authorization" "site" {
+  depends_on = [google_project_service.required]
+
+  name        = "${var.service_name}-site-dnsauth"
+  description = "DNS authorization for ${var.site_hostname}."
+  domain      = var.site_hostname
+  type        = "PER_PROJECT_RECORD"
+}
+
+resource "cloudflare_dns_record" "site_certificate_dns_authorization" {
+  zone_id = var.cloudflare_zone_id
+  name    = trimsuffix(google_certificate_manager_dns_authorization.site.dns_resource_record[0].name, ".")
+  type    = "CNAME"
+  content = trimsuffix(google_certificate_manager_dns_authorization.site.dns_resource_record[0].data, ".")
+  ttl     = 300
+  proxied = false
+  comment = "Google Certificate Manager DNS authorization for ${var.site_hostname}."
+}
+
+resource "google_certificate_manager_certificate" "site" {
+  depends_on = [
+    cloudflare_dns_record.site_certificate_dns_authorization,
+    google_project_service.required,
+  ]
+
+  name        = "${var.service_name}-site-cert"
+  description = "Google-managed certificate for ${var.site_hostname}."
+
+  managed {
+    domains            = [var.site_hostname]
+    dns_authorizations = [google_certificate_manager_dns_authorization.site.id]
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 resource "google_certificate_manager_certificate_map" "api" {
   depends_on = [google_project_service.required]
 
@@ -170,8 +235,19 @@ resource "google_certificate_manager_certificate_map_entry" "api" {
   hostname     = var.api_hostname
 }
 
+resource "google_certificate_manager_certificate_map_entry" "site" {
+  name         = "${var.service_name}-site-certmap-entry"
+  description  = "Certificate map entry for ${var.site_hostname}."
+  map          = google_certificate_manager_certificate_map.api.name
+  certificates = [google_certificate_manager_certificate.site.id]
+  hostname     = var.site_hostname
+}
+
 resource "google_compute_target_https_proxy" "api" {
-  depends_on = [google_certificate_manager_certificate_map_entry.api]
+  depends_on = [
+    google_certificate_manager_certificate_map_entry.api,
+    google_certificate_manager_certificate_map_entry.site,
+  ]
 
   name            = "${var.service_name}-https-proxy"
   description     = "HTTPS proxy for ${var.api_hostname}."
@@ -217,4 +293,14 @@ resource "cloudflare_dns_record" "api" {
   ttl     = 1
   proxied = true
   comment = "Routes ${var.api_hostname} to the Google external HTTPS load balancer."
+}
+
+resource "cloudflare_dns_record" "site" {
+  zone_id = var.cloudflare_zone_id
+  name    = var.site_hostname
+  type    = "A"
+  content = google_compute_global_address.api.address
+  ttl     = 1
+  proxied = true
+  comment = "Routes ${var.site_hostname} to the Google external HTTPS load balancer (passkey association file only until vinoguessr-web is deployed)."
 }

@@ -15,6 +15,17 @@ variable "api_hostname" {
   }
 }
 
+variable "site_hostname" {
+  description = "Passkey relying party ID and future web hostname (ADR-0005). Only its apple-app-site-association path is served, by the API, until vinoguessr-web is deployed."
+  type        = string
+  default     = "vinoguessr.com"
+
+  validation {
+    condition     = can(regex("^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$", var.site_hostname))
+    error_message = "site_hostname must be a lowercase DNS hostname, e.g. \"vinoguessr.com\"."
+  }
+}
+
 variable "app_env" {
   description = "Non-sensitive environment variables passed to the app container."
   type        = map(string)
