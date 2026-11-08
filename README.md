@@ -166,6 +166,12 @@ curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "$(terraform output -r
 curl -sS -o /dev/null -w '%{http_code}\n' https://vinoguessr.com/                                          # expect 404
 ```
 
+Apple fetches the association file through its CDN, and Cloudflare's bot protection can challenge that fetcher. Before relying on passkeys, make sure Bot Fight Mode, Browser Integrity Check, and "Block AI bots" do not apply to `vinoguessr.com/.well-known/apple-app-site-association` (Bot Fight Mode cannot be skipped per path on the Free plan, so turn it off for the zone if needed), then confirm what Apple cached:
+
+```sh
+curl -sS https://app-site-association.cdn-apple.com/a/v1/vinoguessr.com  # expect the same JSON, listing PU5HXZ4FZ2.com.vinoguessr.app
+```
+
 ### 11. Restrict direct ingress
 
 Remove `restrict_direct_cloud_run_ingress = false` from `terraform.tfvars` and apply again. Leaving direct ingress open with `allow_unauthenticated = true` lets requests bypass Cloudflare and Cloud Armor, so `CF-Connecting-IP` can no longer be trusted.
