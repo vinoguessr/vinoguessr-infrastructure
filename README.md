@@ -208,7 +208,7 @@ terraform apply
 
 ## Day-to-day operations
 
-Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token. Refresh the token before each `terraform` command that may run long.
+Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token. Refresh the token right before each `terraform` command.
 
 ### Configuration changes
 
@@ -232,7 +232,7 @@ Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step
 read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
 ```
 
-App secrets reference `version = "latest"`, so the next revision reads the new value. To apply it immediately, run the Deploy workflow (`gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`) or create a revision with a no-op update such as `gcloud run services update vinoguessr-api --region=$REGION --update-env-vars=_DUMMY=$(date +%s)`.
+App secrets reference `version = "latest"`, and Cloud Run resolves it when each instance starts, not per revision. Until every instance is replaced, newly started instances use the new value while running ones keep the old one; for `EDDSA_PRIVATE_KEY`, tokens then fail depending on which instance serves the request. So right after adding the version, always roll out a new revision: run the Deploy workflow (`gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`) or make a no-op update such as `gcloud run services update vinoguessr-api --region=$REGION --update-env-vars=_DUMMY=$(date +%s)`.
 
 ### Rolling back the image
 
