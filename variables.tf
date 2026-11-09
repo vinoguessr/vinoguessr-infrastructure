@@ -1,5 +1,5 @@
 variable "allow_unauthenticated" {
-  description = "Whether to allow public (unauthenticated) invocations of the Cloud Run service."
+  description = "Whether to allow public (unauthenticated) invocations of the API and web Cloud Run services."
   type        = bool
   default     = true
 }
@@ -67,7 +67,7 @@ variable "github_repository_id" {
 }
 
 variable "github_repository_owner_id" {
-  description = "Numeric ID of the owner of var.github_repo (`gh api repos/<owner>/<name> --jq .owner.id`)."
+  description = "Numeric ID of the owner of var.github_repo and var.web_github_repo (`gh api repos/<owner>/<name> --jq .owner.id`)."
   type        = string
   default     = "350685173"
 
@@ -78,13 +78,13 @@ variable "github_repository_owner_id" {
 }
 
 variable "deploy_workflow" {
-  description = "Path of the only workflow in var.github_repo allowed to mint deployer tokens."
+  description = "Path of the only workflow in var.github_repo (and in var.web_github_repo, for the web deployer) allowed to mint deployer tokens."
   type        = string
   default     = ".github/workflows/deploy.yml"
 }
 
 variable "deploy_branch" {
-  description = "Git ref allowed to mint deployer tokens via Workload Identity Federation."
+  description = "Git ref allowed to mint API and web deployer tokens via Workload Identity Federation."
   type        = string
   default     = "refs/heads/main"
 
@@ -194,7 +194,7 @@ variable "region" {
 }
 
 variable "restrict_direct_cloud_run_ingress" {
-  description = "When true, allow external traffic only through Google Cloud Load Balancing and block direct public run.app access."
+  description = "When true, the API and web services accept external traffic only through Google Cloud Load Balancing, blocking direct public run.app access."
   type        = bool
   default     = true
 }
@@ -218,7 +218,7 @@ variable "web_artifact_repo_id" {
 }
 
 variable "web_github_repo" {
-  description = "GitHub repo allowed to assume the web deployer service account, in `owner/name` form. Its owner must be the same as var.github_repo's."
+  description = "GitHub repo allowed to assume the web deployer service account, in `owner/name` form. Its owner ID is checked against var.github_repository_owner_id."
   type        = string
   default     = "vinoguessr/vinoguessr-web"
 

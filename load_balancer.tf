@@ -30,7 +30,7 @@ resource "google_compute_security_policy" "api" {
   depends_on = [google_project_service.required]
 
   name        = "${var.service_name}-cloudflare-only"
-  description = "Allow only Cloudflare proxy IP ranges to reach ${var.api_hostname}."
+  description = "Allow only Cloudflare proxy IP ranges to reach ${var.api_hostname} and ${var.site_hostname}."
   type        = "CLOUD_ARMOR"
 
   dynamic "rule" {

@@ -9,6 +9,11 @@ resource "google_artifact_registry_repository" "web" {
   location      = var.region
   format        = "DOCKER"
   description   = "Container images for ${var.web_service_name}."
+
+  # Overrides the provider's default `service` label so billing and filters count the web separately.
+  labels = {
+    service = var.web_service_name
+  }
 }
 
 resource "google_artifact_registry_repository_iam_member" "web_deployer_ar_writer" {
@@ -86,6 +91,10 @@ resource "google_cloud_run_v2_service" "web" {
   location            = var.region
   ingress             = var.restrict_direct_cloud_run_ingress ? "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER" : "INGRESS_TRAFFIC_ALL"
   deletion_protection = true
+
+  labels = {
+    service = var.web_service_name
+  }
 
   template {
     service_account = google_service_account.web_runtime.email

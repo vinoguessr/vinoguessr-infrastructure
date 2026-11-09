@@ -277,6 +277,8 @@ gcloud run services update vinoguessr-api \
 
 The web rolls back the same way with `vinoguessr-web` in place of `vinoguessr-api` (service, repository, and image name).
 
+The next Deploy run (a push to `main`, or the nightly schedule: 21:00 UTC for the API, 21:30 UTC for the web) redeploys `main` and undoes the rollback. Keep it by disabling that repository's Deploy workflow (`gh workflow disable deploy.yml -R vinoguessr/<repository>`) until a fix or revert is on `main`, then enable it again.
+
 <!-- vinoguessr-foundation -->
 ## Scope
 
@@ -284,7 +286,7 @@ Infrastructure code: Terraform / Google Cloud Run / Cloudflare / OpenTelemetry.
 
 ## Architecture
 
-The VinoGuessr API and PostgreSQL are the source of truth for business data. Never expose credentials in Terraform state, plans, logs, or the repository. `vinoguessr-api`'s and `vinoguessr-web`'s GitHub Actions build container images and roll them out to Cloud Run, and Terraform ignores drift in the running images.
+The VinoGuessr API and PostgreSQL are the source of truth for business data. Never expose credentials in Terraform state, plans, logs, or the repository. `vinoguessr-api`'s GitHub Actions builds container images and rolls them out to Cloud Run, and Terraform ignores drift in the running image.
 
 ## Verification
 
