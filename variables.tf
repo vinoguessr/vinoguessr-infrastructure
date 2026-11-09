@@ -1,5 +1,5 @@
 variable "allow_unauthenticated" {
-  description = "Whether to allow public (unauthenticated) invocations of the Cloud Run service."
+  description = "Whether to allow public (unauthenticated) invocations of the API and web Cloud Run services."
   type        = bool
   default     = true
 }
@@ -16,7 +16,7 @@ variable "api_hostname" {
 }
 
 variable "site_hostname" {
-  description = "Passkey relying party ID and future web hostname (ADR-0005). Only its apple-app-site-association path is served, by the API, until vinoguessr-web is deployed."
+  description = "Passkey relying party ID and web hostname (ADR-0005), served by vinoguessr-web except its apple-app-site-association path, which the API serves."
   type        = string
   default     = "vinoguessr.com"
 
@@ -67,7 +67,7 @@ variable "github_repository_id" {
 }
 
 variable "github_repository_owner_id" {
-  description = "Numeric ID of the owner of var.github_repo (`gh api repos/<owner>/<name> --jq .owner.id`)."
+  description = "Numeric ID of the owner of var.github_repo and var.web_github_repo (`gh api repos/<owner>/<name> --jq .owner.id`)."
   type        = string
   default     = "350685173"
 
@@ -78,13 +78,13 @@ variable "github_repository_owner_id" {
 }
 
 variable "deploy_workflow" {
-  description = "Path of the only workflow in var.github_repo allowed to mint deployer tokens."
+  description = "Path of the only workflow in var.github_repo (and in var.web_github_repo, for the web deployer) allowed to mint deployer tokens."
   type        = string
   default     = ".github/workflows/deploy.yml"
 }
 
 variable "deploy_branch" {
-  description = "Git ref allowed to mint deployer tokens via Workload Identity Federation."
+  description = "Git ref allowed to mint API and web deployer tokens via Workload Identity Federation."
   type        = string
   default     = "refs/heads/main"
 
@@ -194,7 +194,7 @@ variable "region" {
 }
 
 variable "restrict_direct_cloud_run_ingress" {
-  description = "When true, allow external traffic only through Google Cloud Load Balancing and block direct public run.app access."
+  description = "When true, the API and web services accept external traffic only through Google Cloud Load Balancing, blocking direct public run.app access."
   type        = bool
   default     = true
 }
@@ -219,4 +219,61 @@ variable "service_name" {
   description = "Cloud Run service name."
   type        = string
   default     = "vinoguessr-api"
+}
+
+variable "web_service_name" {
+  description = "Cloud Run service name for vinoguessr-web, which serves site_hostname."
+  type        = string
+  default     = "vinoguessr-web"
+}
+
+variable "web_artifact_repo_id" {
+  description = "Artifact Registry repository for vinoguessr-web images."
+  type        = string
+  default     = "vinoguessr-web"
+}
+
+variable "web_github_repo" {
+  description = "GitHub repo allowed to assume the web deployer service account, in `owner/name` form. Its owner ID is checked against var.github_repository_owner_id."
+  type        = string
+  default     = "vinoguessr/vinoguessr-web"
+
+  validation {
+    condition     = can(regex("^[^/]+/[^/]+$", var.web_github_repo))
+    error_message = "web_github_repo must be in `owner/name` form, e.g. \"vinoguessr/vinoguessr-web\"."
+  }
+}
+
+variable "web_github_repository_id" {
+  description = "Numeric ID of var.web_github_repo (`gh api repos/<owner>/<name> --jq .id`)."
+  type        = string
+  default     = "1053443996"
+
+  validation {
+    condition     = can(regex("^[0-9]+$", var.web_github_repository_id))
+    error_message = "web_github_repository_id must be the numeric repository ID."
+  }
+}
+
+variable "web_bootstrap_image" {
+  description = "Image used only when the web Cloud Run service is first created. vinoguessr-web's Deploy workflow then rolls out its own image; Terraform ignores image drift."
+  type        = string
+  default     = "us-docker.pkg.dev/cloudrun/container/hello"
+}
+
+variable "web_memory" {
+  description = "Memory limit for the web Cloud Run container."
+  type        = string
+  default     = "256Mi"
+}
+
+variable "web_max_instance_count" {
+  description = "Maximum number of web Cloud Run container instances."
+  type        = number
+  default     = 3
+
+  validation {
+    condition     = var.web_max_instance_count >= 1
+    error_message = "web_max_instance_count must be at least 1."
+  }
 }
