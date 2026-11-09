@@ -61,15 +61,16 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
-      # Match existing prod probe (long timeout, single attempt). Tuned so a
-      # cold start that triggers DB migrations doesn't get killed prematurely.
+      # Check every second so a cold start serves as soon as the port is open; the
+      # threshold still allows 240 seconds before the instance is treated as failed.
+      # Apple's association-file fetcher, which hits this service, gives up within seconds.
       startup_probe {
         tcp_socket {
           port = 8080
         }
-        timeout_seconds   = 240
-        period_seconds    = 240
-        failure_threshold = 1
+        timeout_seconds   = 1
+        period_seconds    = 1
+        failure_threshold = 240
       }
     }
 
@@ -87,13 +88,16 @@ resource "google_cloud_run_v2_service" "api" {
         startup_cpu_boost = true
       }
 
+      # The app container waits for this probe (depends_on), so a long period delays every
+      # cold start by up to that period. Check every second, allowing 60 seconds in total.
       startup_probe {
         http_get {
           path = "/"
           port = 13133
         }
-        timeout_seconds = 30
-        period_seconds  = 30
+        timeout_seconds   = 1
+        period_seconds    = 1
+        failure_threshold = 60
       }
 
       liveness_probe {
