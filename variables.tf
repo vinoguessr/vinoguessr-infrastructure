@@ -199,6 +199,22 @@ variable "restrict_direct_cloud_run_ingress" {
   default     = true
 }
 
+variable "secret_versions" {
+  description = "Secret Manager version number Cloud Run reads for each app secret, keyed by secret ID. Changing one rolls out a new revision."
+  type        = map(string)
+  nullable    = false
+
+  validation {
+    condition     = toset(keys(var.secret_versions)) == local.secret_env_names
+    error_message = "secret_versions must have exactly one entry per app secret: CLOUDFLARE_API_TOKEN, EDDSA_PRIVATE_KEY, OTP_SECRET_KEY, POSTGRES_PASSWORD, VALKEY_PASSWORD."
+  }
+
+  validation {
+    condition     = alltrue([for version in values(var.secret_versions) : can(regex("^[1-9][0-9]*$", version))])
+    error_message = "secret_versions values must be version numbers such as \"1\", not \"latest\"."
+  }
+}
+
 variable "service_name" {
   description = "Cloud Run service name."
   type        = string

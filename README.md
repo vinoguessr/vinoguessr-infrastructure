@@ -78,7 +78,7 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Set `project_number` to the output of `gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)'`, and `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
+Set `project_number` to the output of `gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)'`, and `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9, and keep `secret_versions` at `"1"` (step 7 adds version 1 of each secret): neither variable has a default, so removing or commenting one out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
 
 Terraform does not change Cloudflare's SSL/TLS mode. Confirm it is `Full (strict)` in the Cloudflare dashboard before publishing `api.vinoguessr.com`.
 
@@ -168,7 +168,7 @@ gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
   --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
 ```
 
-"Build and push image" and "Apply database migrations" must be `success`; "Require main" is `skipped` on main, and "Update Cloud Run service image" fails as expected. A failed migration means the database is unreachable or step 7's `POSTGRES_PASSWORD` or step 8's database variables are wrong, and Cloud Run would start against an unmigrated database, so fix it and run the workflow again. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
+"Build and push image" and "Apply database migrations" must be `success`; "Require main" is `skipped` on main, and "Update Cloud Run service image" fails as expected. A failed migration means the database is unreachable or step 7's `POSTGRES_PASSWORD` or step 8's database variables are wrong, and Cloud Run would start against an unmigrated database, so fix it and run the workflow again. Fixing a secret adds a new version, so also set that secret's entry in `secret_versions` to the number gcloud printed (or check with `gcloud secrets versions list <secret-id>`); otherwise step 10 creates Cloud Run with the old value. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
 
 ### 10. Apply everything with direct ingress open
 
@@ -251,19 +251,46 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 
 ### Rotating a secret
 
-Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Paste any other secret without echoing it:
+Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change. Below, `<OLD>` is the version the service pins now and `<NEW>` is the one you add. Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Rolling back the image (below) keeps the pinned secret versions, and the Deploy workflow only changes the image, so neither undoes a rotation.
 
-```sh
-read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
-```
+#### Secrets that can have two valid values at once
 
-App secrets reference `version = "latest"`, and Cloud Run resolves it when each instance starts, not per revision. Until every instance is replaced, newly started instances use the new value while running ones keep the old one; for `EDDSA_PRIVATE_KEY`, tokens then fail depending on which instance serves the request. So right after adding the version, always roll out a new revision with a no-op update. It keeps the running image and waits until the new revision serves traffic:
+`EDDSA_PRIVATE_KEY` and `OTP_SECRET_KEY` (generated here), `CLOUDFLARE_API_TOKEN` (a new token can exist next to the old one), and `VALKEY_PASSWORD` if the provider accepts a second password for the user.
 
-```sh
-gcloud run services update vinoguessr-api --region="$REGION" --update-env-vars=SECRET_ROTATED_AT="$(date +%s)"
-```
+1. For an issued credential, create the new one at the issuer and keep the old one.
+2. Add `<NEW>`. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in bootstrap step 7, so the key never appears on screen. Paste any other value without echoing it:
 
-The next `terraform apply` removes `SECRET_ROTATED_AT` again, which rolls out one more revision with the same values. Prefer this over the Deploy workflow, which redeploys `main` and runs migrations first, and rolls out nothing if either fails.
+   ```sh
+   read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
+   ```
+
+   gcloud prints `Created version [<NEW>]`. Nothing changes yet: the running revision keeps reading `<OLD>`.
+3. Set that secret's entry in `secret_versions` in `terraform.tfvars` to `<NEW>`, run `terraform plan` (it should change only `google_cloud_run_v2_service.api`), and get approval.
+4. `terraform apply`. It rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready.
+5. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer.
+
+To roll back instead of step 5: set the entry back to `<OLD>`, plan, get approval, and apply, keeping `<OLD>` enabled. Then disable `<NEW>` and revoke the new credential at the issuer.
+
+Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
+
+#### Secrets that have only one valid value
+
+`POSTGRES_PASSWORD` (a role has a single password; rotate it with Neon's "Reset password", which generates the value, because Neon's SQL route needs the password in plain text in `ALTER ROLE`, which lands in history and logs), and `VALKEY_PASSWORD` if the provider accepts only one password. Resetting the value at the issuer breaks the running service until the apply finishes, the old value cannot be restored afterwards, and the API's Deploy workflow runs migrations with the newest `POSTGRES_PASSWORD` version (`latest`) until [vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414) lands. So get approval first, keep Deploy paused while the newest version and the pinned one differ, and keep the window between the reset and the apply short.
+
+1. Set the entry in `secret_versions` to the next version number (the newest one from `gcloud secrets versions list <secret-id> --limit=1 --format='value(name.basename())'`, plus one), run `terraform plan`, and get approval. Nothing has changed yet.
+2. Pause the API's Deploy workflow, then wait until no Deploy run is queued or in progress (disabling does not stop a run that has already started):
+
+   ```sh
+   gh workflow disable deploy.yml -R vinoguessr/vinoguessr-api
+   gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --status queued
+   gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --status in_progress
+   ```
+
+3. Reset the value at the issuer (for Postgres, the Neon Console's "Reset password" for the role, or its API), and add the value it shows as `<NEW>` with the `read -rs` command above, so it is never echoed or stored in shell history. gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
+4. `terraform apply` right away, then re-enable the Deploy workflow with `gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`. A push to `main` made while it was disabled is deployed by the next push, the nightly run, or `gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`.
+5. Once the new revision has served traffic without errors, disable `<OLD>`; it no longer works at the issuer.
+
+The old value cannot be put back, so there is no rollback: if something goes wrong after step 3 (you stop before the apply, the stored value is wrong, or the new revision fails), move forward. With Deploy still paused, make sure the newest version holds the value the issuer has now: if it does, plan and apply with the entry set to it; if it does not, reset again and repeat steps 1 to 5.
 
 ### Rolling back the image
 

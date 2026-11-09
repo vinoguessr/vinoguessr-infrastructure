@@ -41,6 +41,16 @@ cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
 # and Terraform ignores image drift (see cloud_run.tf lifecycle block).
 image_tag = "<commit SHA pushed by the vinoguessr-api Deploy workflow>"
 
+# Secret Manager version Cloud Run reads for each app secret (README step 7 adds version 1).
+# To rotate, add a version, set its number here, and apply (README "Rotating a secret").
+secret_versions = {
+  CLOUDFLARE_API_TOKEN = "1"
+  EDDSA_PRIVATE_KEY    = "1"
+  OTP_SECRET_KEY       = "1"
+  POSTGRES_PASSWORD    = "1"
+  VALKEY_PASSWORD      = "1"
+}
+
 # Non-sensitive environment variables.
 # Sensitive values (POSTGRES_PASSWORD, VALKEY_PASSWORD, EDDSA_PRIVATE_KEY,
 # CLOUDFLARE_API_TOKEN, OTP_SECRET_KEY) are managed via Secret Manager —
