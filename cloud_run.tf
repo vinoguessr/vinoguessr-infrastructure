@@ -61,16 +61,15 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
-      # Check every second so a cold start serves as soon as the port is open; the
-      # threshold still allows 240 seconds before the instance is treated as failed.
-      # Apple's association-file fetcher, which hits this service, gives up within seconds.
+      # One TCP attempt that waits up to 240 seconds for the port to open. Cold-start logs show
+      # it succeeds within about a second of the collector becoming healthy.
       startup_probe {
         tcp_socket {
           port = 8080
         }
-        timeout_seconds   = 1
-        period_seconds    = 1
-        failure_threshold = 240
+        timeout_seconds   = 240
+        period_seconds    = 240
+        failure_threshold = 1
       }
     }
 
@@ -89,7 +88,8 @@ resource "google_cloud_run_v2_service" "api" {
       }
 
       # The app container waits for this probe (depends_on), so a long period delays every
-      # cold start by up to that period. Check every second, allowing 60 seconds in total.
+      # cold start by up to that period: with 30 seconds, cold starts took about 30 seconds and
+      # Apple's association-file fetcher timed out. Check every second, allowing 60 seconds.
       startup_probe {
         http_get {
           path = "/"
