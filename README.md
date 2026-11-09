@@ -275,7 +275,7 @@ Never disable the version the service pins: new instances could not start, and w
 
 #### Secrets that have only one valid value
 
-`POSTGRES_PASSWORD` (a role has a single password), and `VALKEY_PASSWORD` if the provider accepts only one. Changing the value at the issuer breaks the running service until the apply finishes, and the API's Deploy workflow runs migrations with the newest `POSTGRES_PASSWORD` version (`latest`) until [vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414) lands. So get approval first, keep Deploy paused while the newest version and the pinned one differ, and keep the window between the issuer change and the apply short.
+`POSTGRES_PASSWORD` (a role has a single password; rotate it with Neon's "Reset password", which generates the value, because Neon's SQL route needs the password in plain text in `ALTER ROLE`, which lands in history and logs), and `VALKEY_PASSWORD` if the provider accepts only one password. Resetting the value at the issuer breaks the running service until the apply finishes, the old value cannot be restored afterwards, and the API's Deploy workflow runs migrations with the newest `POSTGRES_PASSWORD` version (`latest`) until [vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414) lands. So get approval first, keep Deploy paused while the newest version and the pinned one differ, and keep the window between the reset and the apply short.
 
 1. Set the entry in `secret_versions` to the next version number (the newest one from `gcloud secrets versions list <secret-id> --limit=1 --format='value(name.basename())'`, plus one), run `terraform plan`, and get approval. Nothing has changed yet.
 2. Pause the API's Deploy workflow, then wait until no Deploy run is queued or in progress (disabling does not stop a run that has already started):
@@ -286,30 +286,11 @@ Never disable the version the service pins: new instances could not start, and w
    gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --status in_progress
    ```
 
-3. Add `<NEW>` and set the same value at the issuer, without printing it:
-   - If you choose the value (Postgres): generate it into Secret Manager, then copy it from there into psql's `\password <role>` prompt and clear the clipboard. Never use `ALTER ROLE ... PASSWORD '...'`, which lands in shell history and server logs.
-
-     ```sh
-     openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add POSTGRES_PASSWORD --data-file=-
-     gcloud secrets versions access <NEW> --secret=POSTGRES_PASSWORD | pbcopy  # paste at the \password prompt
-     pbcopy < /dev/null
-     ```
-
-     Clipboard history apps and Universal Clipboard can keep or sync the value; turn them off for this step.
-
-   - If the issuer generates the value (a console or API reset): reset it there, then add it with the `read -rs` command above.
-
-   gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
+3. Reset the value at the issuer (for Postgres, the Neon Console's "Reset password" for the role, or its API), and add the value it shows as `<NEW>` with the `read -rs` command above, so it is never echoed or stored in shell history. gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
 4. `terraform apply` right away, then re-enable the Deploy workflow with `gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`. A push to `main` made while it was disabled is deployed by the next push, the nightly run, or `gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`.
-5. Once the new revision has served traffic without errors, disable `<OLD>`.
+5. Once the new revision has served traffic without errors, disable `<OLD>`; it no longer works at the issuer.
 
-If you stop after step 3 but before the apply, the service still pins `<OLD>`: set the issuer back to `<OLD>`'s value right away (for Postgres, copy it from `<OLD>` into `\password` as in step 3), which restores service without an apply. Then, with Deploy still paused, make the newest version match the pin again: follow steps 1 to 4, adding a copy of `<OLD>` in step 3 (below) and leaving the issuer unchanged.
-
-To roll back after the apply, roll forward to the old value, because it no longer works at the issuer: follow steps 1 to 5, and in step 3 add a copy of `<OLD>` as the new version instead of a new value, then set the issuer back to it. If `<OLD>` is already disabled, enable it first with `gcloud secrets versions enable <OLD> --secret=<secret-id>`. Copy it without printing it:
-
-```sh
-gcloud secrets versions access <OLD> --secret=<secret-id> | gcloud secrets versions add <secret-id> --data-file=-
-```
+The old value cannot be put back, so there is no rollback: if something goes wrong after step 3 (you stop before the apply, the stored value is wrong, or the new revision fails), move forward. With Deploy still paused, make sure the newest version holds the value the issuer has now: if it does, plan and apply with the entry set to it; if it does not, reset again and repeat steps 1 to 5.
 
 ### Rolling back the image
 
