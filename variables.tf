@@ -202,6 +202,7 @@ variable "restrict_direct_cloud_run_ingress" {
 variable "secret_versions" {
   description = "Secret Manager version number Cloud Run reads for each app secret, keyed by secret ID. Changing one rolls out a new revision."
   type        = map(string)
+  nullable    = false
 
   validation {
     condition     = toset(keys(var.secret_versions)) == local.secret_env_names

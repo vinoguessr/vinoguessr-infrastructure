@@ -168,7 +168,7 @@ gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
   --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
 ```
 
-"Build and push image" and "Apply database migrations" must be `success`; "Require main" is `skipped` on main, and "Update Cloud Run service image" fails as expected. A failed migration means the database is unreachable or step 7's `POSTGRES_PASSWORD` or step 8's database variables are wrong, and Cloud Run would start against an unmigrated database, so fix it and run the workflow again. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
+"Build and push image" and "Apply database migrations" must be `success`; "Require main" is `skipped` on main, and "Update Cloud Run service image" fails as expected. A failed migration means the database is unreachable or step 7's `POSTGRES_PASSWORD` or step 8's database variables are wrong, and Cloud Run would start against an unmigrated database, so fix it and run the workflow again. Fixing a secret adds a new version, so also set that secret's entry in `secret_versions` to the number gcloud printed (or check with `gcloud secrets versions list <secret-id>`); otherwise step 10 creates Cloud Run with the old value. Then set `image_tag` in `terraform.tfvars` to the run's full 40-character `headSha` (`github.sha`).
 
 ### 10. Apply everything with direct ingress open
 
@@ -228,20 +228,28 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 
 Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change:
 
-1. Add a new version. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Paste any other secret without echoing it:
+Below, `<OLD>` is the version the service pins now and `<NEW>` is the one you add.
+
+1. For a credential issued elsewhere, get the new value from the issuer first:
+   - `CLOUDFLARE_API_TOKEN`: create a new token next to the old one; keep the old one until step 5.
+   - `VALKEY_PASSWORD`: create the new password or credential at the provider without revoking the old one, if it supports two at once.
+   - `POSTGRES_PASSWORD`: a role has a single password, so changing it in step 3 breaks the running service until the apply in step 4 finishes. Do steps 2 to 4 back to back.
+2. Add `<NEW>`. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Paste any other secret without echoing it:
 
    ```sh
    read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
    ```
 
-   Nothing changes yet: the running revision keeps the version it pins.
-2. Set that secret's entry in `secret_versions` in `terraform.tfvars` to the version number gcloud printed (`Created version [N]`). `terraform plan` should change only `google_cloud_run_v2_service.api`.
-3. After approval, `terraform apply`. It rolls out a new revision that reads the new version; traffic moves to it once it is ready.
-4. Keep the previous version enabled until the new revision has served traffic without errors. To roll back, set the entry back to the old number and apply. Then disable the old version with `gcloud secrets versions disable <N> --secret=<secret-id>`.
+   gcloud prints `Created version [<NEW>]`. Nothing changes yet: the running revision keeps reading `<OLD>`.
+3. Set that secret's entry in `secret_versions` in `terraform.tfvars` to `<NEW>`. For `POSTGRES_PASSWORD`, change the role's password at the database to the same value now.
+4. After approval, `terraform apply`. `terraform plan` should change only `google_cloud_run_v2_service.api`. The apply rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready.
+5. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer (Cloudflare token, Valkey password). Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
+
+To roll back instead of step 5, set the entry back to `<OLD>` and apply, keeping `<OLD>` enabled. For `POSTGRES_PASSWORD`, also change the role's password back, since the old value no longer works at the database.
 
 Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Rolling back the image (below) keeps the pinned secret versions, and the Deploy workflow only changes the image, so neither undoes a rotation.
 
-The Deploy workflow's migration step reads `POSTGRES_PASSWORD` at `latest` from Secret Manager. When rotating the database password, apply step 3 right after step 1, so the service and the migrations use the same password.
+The Deploy workflow's migration step still reads `POSTGRES_PASSWORD` at `latest` ([vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414)). A Deploy run between steps 2 and 4, or after a rollback while `<NEW>` stays enabled, migrates with a different password from the one the service uses, so keep those windows short.
 
 ### Rolling back the image
 
