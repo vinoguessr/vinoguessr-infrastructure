@@ -11,10 +11,10 @@ concurrency:
   cancel-in-progress: true
 jobs:
   policy:
-    uses: vinoguessr/.github/.github/workflows/reusable-repository.yml@01fd9c61bce2139beb8ea173339d45c02d49b69f
+    uses: vinoguessr/.github/.github/workflows/reusable-repository.yml@38adaa6afdfb7df020feb2a7ff93a6ddf1d79af8
     permissions:
       contents: read
   terraform:
-    uses: vinoguessr/.github/.github/workflows/reusable-terraform.yml@01fd9c61bce2139beb8ea173339d45c02d49b69f
+    uses: vinoguessr/.github/.github/workflows/reusable-terraform.yml@38adaa6afdfb7df020feb2a7ff93a6ddf1d79af8
     permissions:
       contents: read
