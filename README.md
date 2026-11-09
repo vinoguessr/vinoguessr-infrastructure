@@ -174,6 +174,8 @@ gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
 
 The first full apply creates both Cloud Run services (the web starts from a placeholder image until step 12), the load balancer, Cloud Armor, Certificate Manager, and the Cloudflare DNS records for `api.vinoguessr.com` and `vinoguessr.com`. Add this to `terraform.tfvars` temporarily so the service is reachable while the certificates are issued. If an `api.vinoguessr.com` or `vinoguessr.com` record already exists in Cloudflare, delete or import it first.
 
+The API's Deploy workflow targets this project since step 8, so pause it now and keep it paused through step 11 ([Keeping Deploy out of an apply](#keeping-deploy-out-of-an-apply)). `vinoguessr-web`'s Deploy does not target this project until step 12.
+
 ```hcl
 restrict_direct_cloud_run_ingress = false
 ```
@@ -204,7 +206,7 @@ Remove `restrict_direct_cloud_run_ingress = false` from `terraform.tfvars` and a
 terraform apply
 ```
 
-`https://api.vinoguessr.com` keeps working, and direct `*.run.app` access is rejected by Cloud Run ingress. From now on, `vinoguessr-api`'s Deploy workflow rolls out new images.
+`https://api.vinoguessr.com` keeps working, and direct `*.run.app` access is rejected by Cloud Run ingress. Enable the API's Deploy workflow again (`gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`); from now on, it rolls out new images.
 
 ### 12. Deploy vinoguessr-web
 
@@ -235,9 +237,25 @@ gh run view <databaseId> -R vinoguessr/vinoguessr-web --json jobs \
 
 Every command below assumes step 0 and the last three lines of step 1 have been run in the current terminal, so gcloud uses the project's configuration and Terraform has a fresh access token. Refresh the token right before each `terraform` command.
 
+### Keeping Deploy out of an apply
+
+`terraform apply` and a repository's Deploy workflow both update the same Cloud Run service. The running image is in `ignore_changes`, so Terraform never plans an image change, but its update still sends the whole template, with the image it read when the apply refreshed the service, before you confirmed. A Deploy that rolls out an image after that refresh is undone by the apply, and if the two updates overlap, one of them fails. So run every `terraform apply` whose plan changes `google_cloud_run_v2_service.api` or `google_cloud_run_v2_service.web` with that service's Deploy workflow paused: `vinoguessr-api`'s for `api`, `vinoguessr-web`'s for `web`, and both when the plan changes both.
+
+1. Disable the workflow, then wait until no run is queued or in progress (disabling does not stop a run that has already started):
+
+   ```sh
+   repo=vinoguessr-api  # or vinoguessr-web
+   gh workflow disable deploy.yml -R "vinoguessr/$repo"
+   gh run list -R "vinoguessr/$repo" --workflow deploy.yml --status queued
+   gh run list -R "vinoguessr/$repo" --workflow deploy.yml --status in_progress
+   ```
+
+2. Only then run `terraform apply`, so its refresh reads the image that is running. Do not apply a plan file saved before the pause.
+3. Enable the workflow again with `gh workflow enable deploy.yml -R "vinoguessr/$repo"`. A push to `main` made while it was disabled is rolled out by the next push, the nightly run, or `gh workflow run deploy.yml -R "vinoguessr/$repo" --ref main`.
+
 ### Configuration changes
 
-Change Cloud Run environment variables, scaling, resources, or the OTel Collector configuration in `terraform.tfvars`, `*.tf`, or `otel/collector-config.yaml`, and run `terraform apply` after approval. This is independent of image rollouts, because Terraform ignores the app image.
+Change Cloud Run environment variables, scaling, resources, or the OTel Collector configuration in `terraform.tfvars`, `*.tf`, or `otel/collector-config.yaml`, and run `terraform apply` after approval. Terraform ignores the app image, so a configuration change never rolls out a different image on purpose, but an apply that changes a Cloud Run service still follows [Keeping Deploy out of an apply](#keeping-deploy-out-of-an-apply).
 
 A change to `otel/collector-config.yaml` creates a new Secret Manager version, and Cloud Run mounts that exact version, so the apply rolls out a new revision whose Collector starts with the new configuration. Old versions are kept (`deletion_policy = "ABANDON"`) so earlier revisions can still start; disable them by hand once no revision uses them.
 
@@ -266,10 +284,10 @@ Cloud Run reads each app secret at the version number in `secret_versions` (neve
 
    gcloud prints `Created version [<NEW>]`. Nothing changes yet: the running revision keeps reading `<OLD>`.
 3. Set that secret's entry in `secret_versions` in `terraform.tfvars` to `<NEW>`, run `terraform plan` (it should change only `google_cloud_run_v2_service.api`), and get approval.
-4. `terraform apply`. It rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready.
+4. Pause the API's Deploy workflow ([Keeping Deploy out of an apply](#keeping-deploy-out-of-an-apply)), run `terraform apply`, and enable Deploy again. The apply rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready.
 5. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer.
 
-To roll back instead of step 5: set the entry back to `<OLD>`, plan, get approval, and apply, keeping `<OLD>` enabled. Then disable `<NEW>` and revoke the new credential at the issuer.
+To roll back instead of step 5: set the entry back to `<OLD>`, plan, get approval, and apply with Deploy paused the same way, keeping `<OLD>` enabled. Then disable `<NEW>` and revoke the new credential at the issuer.
 
 Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
 
@@ -277,18 +295,19 @@ Never disable the version the service pins: new instances could not start, and w
 
 `POSTGRES_PASSWORD` (a role has a single password; rotate it with Neon's "Reset password", which generates the value, because Neon's SQL route needs the password in plain text in `ALTER ROLE`, which lands in history and logs), and `VALKEY_PASSWORD` if the provider accepts only one password. Resetting the value at the issuer breaks the running service until the apply finishes, and the old value cannot be restored afterwards. So get approval first, and keep the window between the reset and the apply short.
 
-The API's Deploy workflow does not need to be paused. It reads only `POSTGRES_PASSWORD`, at the version the service pins, never `latest`, so its migrations and the service always use the same password. A Deploy run that reaches its migrations after a `POSTGRES_PASSWORD` reset and before the apply reads the old, pinned version, fails at "Apply database migrations" because the issuer no longer accepts it, and stops before it updates the service. After the apply, the next push to `main`, the nightly run, or `gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main` deploys what it missed.
+The API's Deploy workflow migrates with the `POSTGRES_PASSWORD` version the service pins, never `latest`, so its migrations and the service always use the same password: a run that reaches its migrations between the reset and the apply reads the old, pinned version and fails at "Apply database migrations". The apply still needs Deploy paused, like every apply that changes the service ([Keeping Deploy out of an apply](#keeping-deploy-out-of-an-apply)). Pause it before the reset, so you never wait for a running Deploy while the service is broken.
 
 1. Set the entry in `secret_versions` to the next version number (the newest one from `gcloud secrets versions list <secret-id> --limit=1 --format='value(name.basename())'`, plus one), run `terraform plan`, and get approval. Nothing has changed yet.
-2. Reset the value at the issuer (for Postgres, the Neon Console's "Reset password" for the role, or its API), and add the value it shows as `<NEW>` with the `read -rs` command above, so it is never echoed or stored in shell history. gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
-3. `terraform apply` right away.
-4. Once the new revision has served traffic without errors, disable `<OLD>`; it no longer works at the issuer.
+2. Pause the API's Deploy workflow and wait until no run is queued or in progress ([Keeping Deploy out of an apply](#keeping-deploy-out-of-an-apply)).
+3. Reset the value at the issuer (for Postgres, the Neon Console's "Reset password" for the role, or its API), and add the value it shows as `<NEW>` with the `read -rs` command above, so it is never echoed or stored in shell history. gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
+4. `terraform apply` right away, then enable the API's Deploy workflow again.
+5. Once the new revision has served traffic without errors, disable `<OLD>`; it no longer works at the issuer.
 
-The old value cannot be put back, so there is no rollback: if something goes wrong after step 2 (you stop before the apply, the stored value is wrong, or the new revision fails), move forward. Make sure the newest version holds the value the issuer has now: if it does, plan and apply with the entry set to it; if it does not, reset again and repeat steps 1 to 4.
+The old value cannot be put back, so there is no rollback: if something goes wrong after step 3 (you stop before the apply, the stored value is wrong, or the new revision fails), move forward with the API's Deploy paused. Make sure the newest version holds the value the issuer has now: if it does, plan and apply with the entry set to it; if it does not, reset again and repeat steps 1 to 5.
 
 ### Rolling back the image
 
-With step 0 and the last three lines of step 1 run in this terminal:
+Every Deploy run (a push to `main`, or the nightly schedule: 21:00 UTC for the API, 21:30 UTC for the web) redeploys `main`, and a run in progress would overwrite the rollback. So first pause that repository's Deploy workflow and wait until no run is queued or in progress, with the commands in [Keeping Deploy out of an apply](#keeping-deploy-out-of-an-apply). Then, with step 0 and the last three lines of step 1 run in this terminal:
 
 ```sh
 gcloud run services update vinoguessr-api \
@@ -298,7 +317,7 @@ gcloud run services update vinoguessr-api \
 
 The web rolls back the same way with `vinoguessr-web` in place of `vinoguessr-api` (service, repository, and image name).
 
-The next Deploy run (a push to `main`, or the nightly schedule: 21:00 UTC for the API, 21:30 UTC for the web) redeploys `main` and undoes the rollback. Keep it by disabling that repository's Deploy workflow (`gh workflow disable deploy.yml -R vinoguessr/<repository>`) until a fix or revert is on `main`, then enable it again.
+Keep Deploy disabled until a fix or revert is on `main`, then enable it again; its next run redeploys `main`.
 
 <!-- vinoguessr-foundation -->
 ## Scope
