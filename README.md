@@ -226,17 +226,14 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 
 ### Rotating a secret
 
-Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change. Below, `<OLD>` is the version the service pins now and `<NEW>` is the one you add.
+Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change. Below, `<OLD>` is the version the service pins now and `<NEW>` is the one you add. Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Rolling back the image (below) keeps the pinned secret versions, and the Deploy workflow only changes the image, so neither undoes a rotation.
 
-Secrets fall into two groups:
+#### Secrets that can have two valid values at once
 
-- **Two values can be valid at once**: `EDDSA_PRIVATE_KEY` and `OTP_SECRET_KEY` (generated here), `CLOUDFLARE_API_TOKEN` (create the new token next to the old one), and `VALKEY_PASSWORD` if the provider accepts a second password for the user.
-- **Only one value is valid**: `POSTGRES_PASSWORD` (a role has a single password), and `VALKEY_PASSWORD` if the provider does not accept a second one. Changing it at the issuer breaks the running service until the apply finishes.
+`EDDSA_PRIVATE_KEY` and `OTP_SECRET_KEY` (generated here), `CLOUDFLARE_API_TOKEN` (a new token can exist next to the old one), and `VALKEY_PASSWORD` if the provider accepts a second password for the user.
 
-Steps:
-
-1. For an issued credential that allows two values, create the new one at the issuer now and keep the old one.
-2. Add `<NEW>`. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in bootstrap step 7, so the key never appears on screen. Paste any other secret without echoing it:
+1. For an issued credential, create the new one at the issuer and keep the old one.
+2. Add `<NEW>`. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in bootstrap step 7, so the key never appears on screen. Paste any other value without echoing it:
 
    ```sh
    read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
@@ -244,18 +241,42 @@ Steps:
 
    gcloud prints `Created version [<NEW>]`. Nothing changes yet: the running revision keeps reading `<OLD>`.
 3. Set that secret's entry in `secret_versions` in `terraform.tfvars` to `<NEW>`, run `terraform plan` (it should change only `google_cloud_run_v2_service.api`), and get approval.
-4. For a single-value secret, pause the API's Deploy workflow first (`gh workflow disable deploy.yml -R vinoguessr/vinoguessr-api`), then change the value at the issuer without echoing it: the provider's console, or psql's `\password <role>` for Postgres (never `ALTER ROLE ... PASSWORD '...'`, which lands in shell history and server logs).
-5. `terraform apply` right away. It rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready. Re-enable the Deploy workflow if you paused it (`gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`).
-6. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer. Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
+4. `terraform apply`. It rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready.
+5. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer.
 
-To roll back instead of step 6:
+To roll back instead of step 5: set the entry back to `<OLD>`, plan, get approval, and apply, keeping `<OLD>` enabled. Then disable `<NEW>` and revoke the new credential at the issuer.
 
-- **Two-value secrets**: set the entry back to `<OLD>` and apply, keeping `<OLD>` enabled. Then disable `<NEW>` and revoke the new credential at the issuer.
-- **`POSTGRES_PASSWORD`**: roll forward with the old value, because the Deploy workflow's migrations read the newest version (`latest`) until [vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414) lands, and must not run with a password the service does not use. Pause the Deploy workflow, copy the old value into a new version without printing it (`gcloud secrets versions access <OLD> --secret=POSTGRES_PASSWORD | gcloud secrets versions add POSTGRES_PASSWORD --data-file=-`), pin that number, change the role's password back, apply, re-enable the Deploy workflow, and disable `<NEW>`. A single-value `VALKEY_PASSWORD` rolls back the same way, without the Deploy constraint.
+Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
 
-Until vinoguessr-api#414 lands, the pinned `POSTGRES_PASSWORD` version must always be the newest one.
+#### Secrets that have only one valid value
 
-Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Rolling back the image (below) keeps the pinned secret versions, and the Deploy workflow only changes the image, so neither undoes a rotation.
+`POSTGRES_PASSWORD` (a role has a single password), and `VALKEY_PASSWORD` if the provider accepts only one. Changing the value at the issuer breaks the running service until the apply finishes, and the API's Deploy workflow runs migrations with the newest `POSTGRES_PASSWORD` version (`latest`) until [vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414) lands. So get approval first, keep Deploy paused while the newest version and the pinned one differ, and keep the window between the issuer change and the apply short.
+
+1. Set the entry in `secret_versions` to the next version number (the newest one from `gcloud secrets versions list <secret-id> --limit=1 --format='value(name.basename())'`, plus one), run `terraform plan`, and get approval. Nothing has changed yet.
+2. Pause the API's Deploy workflow, then wait until no Deploy run is queued or in progress (disabling does not stop a run that has already started):
+
+   ```sh
+   gh workflow disable deploy.yml -R vinoguessr/vinoguessr-api
+   gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --status queued
+   gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --status in_progress
+   ```
+
+3. Add `<NEW>` and set the same value at the issuer, without printing it:
+   - If you choose the value (Postgres): generate it into Secret Manager, then copy it from there into psql's `\password <role>` prompt and clear the clipboard. Never use `ALTER ROLE ... PASSWORD '...'`, which lands in shell history and server logs.
+
+     ```sh
+     openssl rand -base64 32 | tr -d '\n' | gcloud secrets versions add POSTGRES_PASSWORD --data-file=-
+     gcloud secrets versions access <NEW> --secret=POSTGRES_PASSWORD | pbcopy  # paste at the \password prompt
+     pbcopy < /dev/null
+     ```
+
+   - If the issuer generates the value (a console or API reset): reset it there, then add it with the `read -rs` command above.
+
+   gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
+4. `terraform apply` right away, then re-enable the Deploy workflow with `gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`. A push to `main` made while it was disabled is deployed by the next push, the nightly run, or `gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`.
+5. Once the new revision has served traffic without errors, disable `<OLD>`.
+
+To roll back, or to recover if you stop after step 3: the old value no longer works at the issuer, so roll forward to it. Copy it into a new version without printing it (`gcloud secrets versions access <OLD> --secret=<secret-id> | gcloud secrets versions add <secret-id> --data-file=-`), then follow steps 1 to 5 with that version as `<NEW>`: plan and approval first, Deploy paused, the issuer set back to the old value (for Postgres, copy it from the new version into `\password` as in step 3), apply, Deploy re-enabled. Disable the version you are leaving once the service is healthy.
 
 ### Rolling back the image
 
