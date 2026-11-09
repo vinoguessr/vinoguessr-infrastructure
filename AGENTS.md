@@ -84,7 +84,7 @@ This GitHub review is in addition to the independent Review Agent running in par
 
 ## vinoguessr-infrastructure specifics
 
-Shared rules source: `vinoguessr/.github@01fd9c61bce2139beb8ea173339d45c02d49b69f`.
+Shared rules source: `vinoguessr/.github@38adaa6afdfb7df020feb2a7ff93a6ddf1d79af8`.
 
 Infrastructure code: Terraform / Google Cloud Run / Cloudflare / OpenTelemetry.
 
