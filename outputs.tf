@@ -62,3 +62,28 @@ output "wif_provider" {
   description = "Full resource name of the WIF provider. Pass to google-github-actions/auth as `workload_identity_provider`."
   value       = google_iam_workload_identity_pool_provider.github.name
 }
+
+output "web_artifact_repo" {
+  description = "Artifact Registry path (host/project/repo) for vinoguessr-web images."
+  value       = "${google_artifact_registry_repository.web.location}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.web.repository_id}"
+}
+
+output "web_deployer_sa_email" {
+  description = "Service account email impersonated by vinoguessr-web's GitHub Actions. Pass to google-github-actions/auth as `service_account`."
+  value       = google_service_account.web_deployer.email
+}
+
+output "web_service_url" {
+  description = "URL of the web Cloud Run service (direct access is rejected while ingress is restricted)."
+  value       = google_cloud_run_v2_service.web.uri
+}
+
+output "web_url" {
+  description = "Web served through the public custom domain."
+  value       = "https://${var.site_hostname}/"
+}
+
+output "web_wif_provider" {
+  description = "Full resource name of the web WIF provider. Pass to vinoguessr-web's google-github-actions/auth as `workload_identity_provider`."
+  value       = google_iam_workload_identity_pool_provider.github_web.name
+}

@@ -90,7 +90,7 @@ resource "google_compute_url_map" "api" {
   depends_on = [google_project_service.required]
 
   name            = "${var.service_name}-url-map"
-  description     = "Routes ${var.api_hostname} and the association file on ${var.site_hostname} to Cloud Run."
+  description     = "Routes ${var.api_hostname} to the API and ${var.site_hostname} to the web, except its association file."
   default_service = google_compute_backend_service.api.id
 
   host_rule {
@@ -103,9 +103,8 @@ resource "google_compute_url_map" "api" {
     default_service = google_compute_backend_service.api.id
   }
 
-  # The passkey relying party (ADR-0005). The API generates the association file from
-  # APPLE_APP_ID, so only that path reaches it; everything else on this host returns 404
-  # instead of exposing the API, until vinoguessr-web is deployed behind this host.
+  # The passkey relying party (ADR-0005) is served by vinoguessr-web. The API generates the
+  # association file from APPLE_APP_ID, so that one path still reaches the API.
   host_rule {
     hosts        = [var.site_hostname]
     path_matcher = "site"
@@ -113,16 +112,7 @@ resource "google_compute_url_map" "api" {
 
   path_matcher {
     name            = "site"
-    default_service = google_compute_backend_service.api.id
-
-    default_route_action {
-      fault_injection_policy {
-        abort {
-          http_status = 404
-          percentage  = 100
-        }
-      }
-    }
+    default_service = google_compute_backend_service.web.id
 
     path_rule {
       paths   = ["/.well-known/apple-app-site-association"]
@@ -303,6 +293,5 @@ resource "cloudflare_dns_record" "site" {
   ttl     = 1
   proxied = true
   # Cloudflare rejects comments over 100 characters (error 9313) on the Free plan.
-  # Until vinoguessr-web is deployed, the load balancer serves only the passkey association file here.
   comment = "Routes ${var.site_hostname} to the Google external HTTPS load balancer."
 }
