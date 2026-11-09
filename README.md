@@ -226,30 +226,36 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 
 ### Rotating a secret
 
-Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change:
+Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change. Below, `<OLD>` is the version the service pins now and `<NEW>` is the one you add.
 
-Below, `<OLD>` is the version the service pins now and `<NEW>` is the one you add.
+Secrets fall into two groups:
 
-1. For a credential issued elsewhere, get the new value from the issuer first:
-   - `CLOUDFLARE_API_TOKEN`: create a new token next to the old one; keep the old one until step 5.
-   - `VALKEY_PASSWORD`: create the new password or credential at the provider without revoking the old one, if it supports two at once.
-   - `POSTGRES_PASSWORD`: a role has a single password, so changing it in step 3 breaks the running service until the apply in step 4 finishes. Do steps 2 to 4 back to back.
-2. Add `<NEW>`. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Paste any other secret without echoing it:
+- **Two values can be valid at once**: `EDDSA_PRIVATE_KEY` and `OTP_SECRET_KEY` (generated here), `CLOUDFLARE_API_TOKEN` (create the new token next to the old one), and `VALKEY_PASSWORD` if the provider accepts a second password for the user.
+- **Only one value is valid**: `POSTGRES_PASSWORD` (a role has a single password), and `VALKEY_PASSWORD` if the provider does not accept a second one. Changing it at the issuer breaks the running service until the apply finishes.
+
+Steps:
+
+1. For an issued credential that allows two values, create the new one at the issuer now and keep the old one.
+2. Add `<NEW>`. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in bootstrap step 7, so the key never appears on screen. Paste any other secret without echoing it:
 
    ```sh
    read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
    ```
 
    gcloud prints `Created version [<NEW>]`. Nothing changes yet: the running revision keeps reading `<OLD>`.
-3. Set that secret's entry in `secret_versions` in `terraform.tfvars` to `<NEW>`. For `POSTGRES_PASSWORD`, change the role's password at the database to the same value now.
-4. After approval, `terraform apply`. `terraform plan` should change only `google_cloud_run_v2_service.api`. The apply rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready.
-5. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer (Cloudflare token, Valkey password). Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
+3. Set that secret's entry in `secret_versions` in `terraform.tfvars` to `<NEW>`, run `terraform plan` (it should change only `google_cloud_run_v2_service.api`), and get approval.
+4. For a single-value secret, pause the API's Deploy workflow first (`gh workflow disable deploy.yml -R vinoguessr/vinoguessr-api`), then change the value at the issuer without echoing it: the provider's console, or psql's `\password <role>` for Postgres (never `ALTER ROLE ... PASSWORD '...'`, which lands in shell history and server logs).
+5. `terraform apply` right away. It rolls out a new revision that reads `<NEW>`; traffic moves to it once it is ready. Re-enable the Deploy workflow if you paused it (`gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`).
+6. Once the new revision has served traffic without errors, disable `<OLD>` with `gcloud secrets versions disable <OLD> --secret=<secret-id>`, and revoke the old credential at the issuer. Never disable the version the service pins: new instances could not start, and with `min_instance_count = 0` that is an outage after the service scales to zero.
 
-To roll back instead of step 5, set the entry back to `<OLD>` and apply, keeping `<OLD>` enabled. For `POSTGRES_PASSWORD`, also change the role's password back, since the old value no longer works at the database.
+To roll back instead of step 6:
+
+- **Two-value secrets**: set the entry back to `<OLD>` and apply, keeping `<OLD>` enabled. Then disable `<NEW>` and revoke the new credential at the issuer.
+- **`POSTGRES_PASSWORD`**: roll forward with the old value, because the Deploy workflow's migrations read the newest version (`latest`) until [vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414) lands, and must not run with a password the service does not use. Pause the Deploy workflow, copy the old value into a new version without printing it (`gcloud secrets versions access <OLD> --secret=POSTGRES_PASSWORD | gcloud secrets versions add POSTGRES_PASSWORD --data-file=-`), pin that number, change the role's password back, apply, re-enable the Deploy workflow, and disable `<NEW>`. A single-value `VALKEY_PASSWORD` rolls back the same way, without the Deploy constraint.
+
+Until vinoguessr-api#414 lands, the pinned `POSTGRES_PASSWORD` version must always be the newest one.
 
 Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Rolling back the image (below) keeps the pinned secret versions, and the Deploy workflow only changes the image, so neither undoes a rotation.
-
-The Deploy workflow's migration step still reads `POSTGRES_PASSWORD` at `latest` ([vinoguessr-api#414](https://github.com/vinoguessr/vinoguessr-api/issues/414)). A Deploy run between steps 2 and 4, or after a rollback while `<NEW>` stays enabled, migrates with a different password from the one the service uses, so keep those windows short.
 
 ### Rolling back the image
 
