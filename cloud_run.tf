@@ -47,7 +47,9 @@ resource "google_cloud_run_v2_service" "api" {
         }
       }
 
-      # Sensitive env vars sourced from Secret Manager.
+      # Sensitive env vars sourced from Secret Manager, pinned to var.secret_versions.
+      # Not "latest": Cloud Run resolves that when each instance starts, so a new version would
+      # mix old and new values within one revision, and a rollback would not restore the old value.
       dynamic "env" {
         for_each = local.secret_env_names
         content {
@@ -55,7 +57,7 @@ resource "google_cloud_run_v2_service" "api" {
           value_source {
             secret_key_ref {
               secret  = google_secret_manager_secret.app[env.value].secret_id
-              version = "latest"
+              version = var.secret_versions[env.value]
             }
           }
         }

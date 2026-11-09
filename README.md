@@ -78,7 +78,7 @@ cp terraform.tfvars.example terraform.tfvars
 $EDITOR terraform.tfvars
 ```
 
-Set `project_number` to the output of `gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)'`, and `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9: the variable has no default, so removing or commenting it out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
+Set `project_number` to the output of `gcloud projects describe "$PROJECT_ID" --format='value(projectNumber)'`, and `cloudflare_zone_id` to the zone ID of `vinoguessr.com`. Leave the `image_tag` placeholder in place until step 9, and keep `secret_versions` at `"1"` (step 7 adds version 1 of each secret): neither variable has a default, so removing or commenting one out makes even the targeted apply in step 6 fail with "No value for required variable". The Cloudflare provider reads `CLOUDFLARE_API_TOKEN` from the environment and needs DNS edit access. It is a different token from the `CLOUDFLARE_API_TOKEN` secret the app reads from Secret Manager; they do not need to match.
 
 Terraform does not change Cloudflare's SSL/TLS mode. Confirm it is `Full (strict)` in the Cloudflare dashboard before publishing `api.vinoguessr.com`.
 
@@ -226,19 +226,22 @@ terraform providers lock -platform=linux_amd64 -platform=darwin_arm64 -platform=
 
 ### Rotating a secret
 
-Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Paste any other secret without echoing it:
+Cloud Run reads each app secret at the version number in `secret_versions` (never `latest`), so every instance of a revision sees the same value, and a rotation is a normal configuration change:
 
-```sh
-read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
-```
+1. Add a new version. Generate a new `OTP_SECRET_KEY` or `EDDSA_PRIVATE_KEY` with the commands in step 7, so the key never appears on screen. Paste any other secret without echoing it:
 
-App secrets reference `version = "latest"`, and Cloud Run resolves it when each instance starts, not per revision. Until every instance is replaced, newly started instances use the new value while running ones keep the old one; for `EDDSA_PRIVATE_KEY`, tokens then fail depending on which instance serves the request. So right after adding the version, always roll out a new revision with a no-op update. It keeps the running image and waits until the new revision serves traffic:
+   ```sh
+   read -rs value && printf '%s' "$value" | gcloud secrets versions add <secret-id> --data-file=-; unset value
+   ```
 
-```sh
-gcloud run services update vinoguessr-api --region="$REGION" --update-env-vars=SECRET_ROTATED_AT="$(date +%s)"
-```
+   Nothing changes yet: the running revision keeps the version it pins.
+2. Set that secret's entry in `secret_versions` in `terraform.tfvars` to the version number gcloud printed (`Created version [N]`). `terraform plan` should change only `google_cloud_run_v2_service.api`.
+3. After approval, `terraform apply`. It rolls out a new revision that reads the new version; traffic moves to it once it is ready.
+4. Keep the previous version enabled until the new revision has served traffic without errors. To roll back, set the entry back to the old number and apply. Then disable the old version with `gcloud secrets versions disable <N> --secret=<secret-id>`.
 
-The next `terraform apply` removes `SECRET_ROTATED_AT` again, which rolls out one more revision with the same values. Prefer this over the Deploy workflow, which redeploys `main` and runs migrations first, and rolls out nothing if either fails.
+Rotating `EDDSA_PRIVATE_KEY` invalidates every token already issued, so every user has to sign in again; rotating `OTP_SECRET_KEY` only invalidates one-time codes still in flight. Rolling back the image (below) keeps the pinned secret versions, and the Deploy workflow only changes the image, so neither undoes a rotation.
+
+The Deploy workflow's migration step reads `POSTGRES_PASSWORD` at `latest` from Secret Manager. When rotating the database password, apply step 3 right after step 1, so the service and the migrations use the same password.
 
 ### Rolling back the image
 
