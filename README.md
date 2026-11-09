@@ -270,13 +270,21 @@ Never disable the version the service pins: new instances could not start, and w
      pbcopy < /dev/null
      ```
 
+     Clipboard history apps and Universal Clipboard can keep or sync the value; turn them off for this step.
+
    - If the issuer generates the value (a console or API reset): reset it there, then add it with the `read -rs` command above.
 
    gcloud prints `Created version [<NEW>]`; it must be the number you planned in step 1. If it is not, set the entry to the printed number and plan again.
 4. `terraform apply` right away, then re-enable the Deploy workflow with `gh workflow enable deploy.yml -R vinoguessr/vinoguessr-api`. A push to `main` made while it was disabled is deployed by the next push, the nightly run, or `gh workflow run deploy.yml -R vinoguessr/vinoguessr-api --ref main`.
 5. Once the new revision has served traffic without errors, disable `<OLD>`.
 
-To roll back, or to recover if you stop after step 3: the old value no longer works at the issuer, so roll forward to it. Copy it into a new version without printing it (`gcloud secrets versions access <OLD> --secret=<secret-id> | gcloud secrets versions add <secret-id> --data-file=-`), then follow steps 1 to 5 with that version as `<NEW>`: plan and approval first, Deploy paused, the issuer set back to the old value (for Postgres, copy it from the new version into `\password` as in step 3), apply, Deploy re-enabled. Disable the version you are leaving once the service is healthy.
+If you stop after step 3 but before the apply, the service still pins `<OLD>`: set the issuer back to `<OLD>`'s value right away (for Postgres, copy it from `<OLD>` into `\password` as in step 3), which restores service without an apply. Then, with Deploy still paused, make the newest version match the pin again: follow steps 1 to 4, adding a copy of `<OLD>` in step 3 (below) and leaving the issuer unchanged.
+
+To roll back after the apply, roll forward to the old value, because it no longer works at the issuer: follow steps 1 to 5, and in step 3 add a copy of `<OLD>` as the new version instead of a new value, then set the issuer back to it. If `<OLD>` is already disabled, enable it first with `gcloud secrets versions enable <OLD> --secret=<secret-id>`. Copy it without printing it:
+
+```sh
+gcloud secrets versions access <OLD> --secret=<secret-id> | gcloud secrets versions add <secret-id> --data-file=-
+```
 
 ### Rolling back the image
 
