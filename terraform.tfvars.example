@@ -26,6 +26,13 @@ cloudflare_zone_id = "0123456789abcdef0123456789abcdef"
 # Default true blocks direct public *.run.app access. Set this to false only
 # during initial load balancer / certificate bootstrap, then remove the override.
 # restrict_direct_cloud_run_ingress = true
+# vinoguessr-web, served on site_hostname
+# web_service_name         = "vinoguessr-web"
+# web_artifact_repo_id     = "vinoguessr-web"
+# web_github_repo          = "vinoguessr/vinoguessr-web"
+# web_github_repository_id = "1053443996"
+# web_memory               = "256Mi"
+# web_max_instance_count   = 3
 
 # The first full `terraform apply` creates Cloud Run with this tag, so the image
 # must already exist in Artifact Registry: set it to the commit SHA pushed by

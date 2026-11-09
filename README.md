@@ -1,17 +1,17 @@
 # vinoguessr-infrastructure
 
-Terraform for the VinoGuessr production environment: Cloud Run, Artifact Registry, Secret Manager, IAM, Workload Identity Federation, the external HTTPS Load Balancer with Cloud Armor and Certificate Manager, and Cloudflare DNS for `vinoguessr.com`.
+Terraform for the VinoGuessr production environment: Cloud Run (the API and the web), Artifact Registry, Secret Manager, IAM, Workload Identity Federation, the external HTTPS Load Balancer with Cloud Armor and Certificate Manager, and Cloudflare DNS for `vinoguessr.com`.
 
 ## How it fits together
 
-- **Images and rollouts**: `vinoguessr-api`'s GitHub Actions builds the image, pushes it to Artifact Registry, applies Atlas migrations, and runs `gcloud run services update --image=...`. Terraform ignores drift in the running image.
-- **Authentication**: Workload Identity Federation. No long-lived JSON keys. Only the Deploy workflow (`.github/workflows/deploy.yml`) running on the `main` branch of `vinoguessr/vinoguessr-api`, checked by repository name, repository ID, and owner ID, can impersonate the deployer service account.
+- **Images and rollouts**: `vinoguessr-api`'s GitHub Actions builds the image, pushes it to Artifact Registry, applies Atlas migrations, and runs `gcloud run services update --image=...`. `vinoguessr-web`'s GitHub Actions does the same for the web, without migrations. Terraform ignores drift in the running images.
+- **Authentication**: Workload Identity Federation. No long-lived JSON keys. Only the Deploy workflow (`.github/workflows/deploy.yml`) running on the `main` branch of `vinoguessr/vinoguessr-api`, checked by repository name, repository ID, and owner ID, can impersonate the API's deployer service account. A second provider (`github-web`) admits only the same workflow of `vinoguessr/vinoguessr-web`, which can impersonate only the web's deployer.
 - **Running Terraform**: locally by the owner, after explicit approval. GitHub Actions never runs `terraform apply`; PRs run only `fmt` / `init -backend=false` / `validate`.
 - **Environment**: production only.
 - **Observability**: an OpenTelemetry Collector sidecar on Cloud Run. Its configuration (`otel/collector-config.yaml`) is not secret and is stored as a Secret Manager version by Terraform.
-- **Public path**: `api.vinoguessr.com` is a Cloudflare proxied DNS record → Google global external HTTPS Load Balancer → Cloud Run serverless NEG. Cloud Armor allows only Cloudflare proxy IPs.
-- **Passkey relying party**: `vinoguessr.com` is the passkey RP ID (ADR-0005). The same load balancer serves it, routing only `/.well-known/apple-app-site-association` to the API, which generates it from `APPLE_APP_ID`; every other path on `vinoguessr.com` returns 404 until vinoguessr-web is deployed behind that host.
-- **Exposure**: `allow_unauthenticated = true` stays on. With `restrict_direct_cloud_run_ingress = true` (the default), Cloud Run accepts traffic only through the load balancer and rejects direct `*.run.app` access.
+- **Public path**: `api.vinoguessr.com` and `vinoguessr.com` are Cloudflare proxied DNS records → Google global external HTTPS Load Balancer → Cloud Run serverless NEGs (the API and the web). Cloud Armor allows only Cloudflare proxy IPs.
+- **Passkey relying party**: `vinoguessr.com` is the passkey RP ID (ADR-0005) and is served by vinoguessr-web, except `/.well-known/apple-app-site-association`, which the load balancer routes to the API so it is generated from the same `APPLE_APP_ID` the API uses.
+- **Exposure**: `allow_unauthenticated = true` stays on. With `restrict_direct_cloud_run_ingress = true` (the default), both Cloud Run services accept traffic only through the load balancer and reject direct `*.run.app` access.
 
 ## Bootstrapping a new project
 
@@ -172,7 +172,7 @@ gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
 
 ### 10. Apply everything with direct ingress open
 
-The first full apply creates Cloud Run, the load balancer, Cloud Armor, Certificate Manager, and the Cloudflare DNS records for `api.vinoguessr.com` and `vinoguessr.com`. Add this to `terraform.tfvars` temporarily so the service is reachable while the certificates are issued. If an `api.vinoguessr.com` or `vinoguessr.com` record already exists in Cloudflare, delete or import it first.
+The first full apply creates both Cloud Run services (the web starts from a placeholder image until step 12), the load balancer, Cloud Armor, Certificate Manager, and the Cloudflare DNS records for `api.vinoguessr.com` and `vinoguessr.com`. Add this to `terraform.tfvars` temporarily so the service is reachable while the certificates are issued. If an `api.vinoguessr.com` or `vinoguessr.com` record already exists in Cloudflare, delete or import it first.
 
 ```hcl
 restrict_direct_cloud_run_ingress = false
@@ -187,7 +187,7 @@ Wait until both certificates and certificate map entries are `ACTIVE`, `https://
 
 ```sh
 curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' "$(terraform output -raw site_association_url)"  # expect 200 application/json
-curl -sS -o /dev/null -w '%{http_code}\n' https://vinoguessr.com/                                          # expect 404
+curl -sS -o /dev/null -w '%{http_code}\n' https://vinoguessr.com/                                          # expect 200 (the placeholder page)
 ```
 
 Apple fetches the association file through its CDN, and Cloudflare's bot protection can challenge that fetcher. Before relying on passkeys, make sure Bot Fight Mode, Browser Integrity Check, and "Block AI bots" do not apply to `vinoguessr.com/.well-known/apple-app-site-association` (Bot Fight Mode cannot be skipped per path on the Free plan, so turn it off for the zone if needed), then confirm what Apple cached:
@@ -205,6 +205,31 @@ terraform apply
 ```
 
 `https://api.vinoguessr.com` keeps working, and direct `*.run.app` access is rejected by Cloud Run ingress. From now on, `vinoguessr-api`'s Deploy workflow rolls out new images.
+
+### 12. Deploy vinoguessr-web
+
+In `vinoguessr/vinoguessr-web` → Settings → Secrets and variables → Actions → **Variables**:
+
+| Variable | Source |
+|---|---|
+| `GOOGLE_CLOUD_PROJECT` | `project_id` in `terraform.tfvars` |
+| `GOOGLE_CLOUD_REGION` | `region` in `terraform.tfvars` |
+| `GOOGLE_CLOUD_SERVICE_NAME` | `web_service_name` in `terraform.tfvars` (default `vinoguessr-web`) |
+| `GOOGLE_CLOUD_ARTIFACT_REPO` | `web_artifact_repo_id` in `terraform.tfvars` (default `vinoguessr-web`) |
+| `GOOGLE_CLOUD_WIF_PROVIDER` | `terraform output -raw web_wif_provider` |
+| `GOOGLE_CLOUD_DEPLOYER_SA` | `terraform output -raw web_deployer_sa_email` |
+
+Then run its Deploy workflow on `main` and check that every step succeeded ("Require main" is `skipped` on main):
+
+```sh
+gh workflow run deploy.yml -R vinoguessr/vinoguessr-web --ref main
+gh run list -R vinoguessr/vinoguessr-web --workflow deploy.yml --event workflow_dispatch --branch main \
+  --limit 1 --json databaseId,headSha,url
+gh run view <databaseId> -R vinoguessr/vinoguessr-web --json jobs \
+  --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
+```
+
+`https://vinoguessr.com/` now serves vinoguessr-web, and the association file is still the API's (200, `application/json`, no redirect). From now on, `vinoguessr-web`'s Deploy workflow rolls out new web images.
 
 ## Day-to-day operations
 
@@ -249,6 +274,10 @@ gcloud run services update vinoguessr-api \
   --region="$REGION" \
   --image="$REGION-docker.pkg.dev/$PROJECT_ID/vinoguessr-api/vinoguessr-api:<OLD_SHA>"
 ```
+
+The web rolls back the same way with `vinoguessr-web` in place of `vinoguessr-api` (service, repository, and image name).
+
+The next Deploy run (a push to `main`, or the nightly schedule: 21:00 UTC for the API, 21:30 UTC for the web) redeploys `main` and undoes the rollback. Keep it by disabling that repository's Deploy workflow (`gh workflow disable deploy.yml -R vinoguessr/<repository>`) until a fix or revert is on `main`, then enable it again.
 
 <!-- vinoguessr-foundation -->
 ## Scope
