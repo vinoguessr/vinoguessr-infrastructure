@@ -10,7 +10,7 @@ Write code, documentation, commit messages, labels, and PR titles in English. PR
 
 VinoGuessr is a service for blind wine tasting: people create events, set questions, answer them, get scored, and build a season rating. The VinoGuessr API and PostgreSQL are the source of truth for business data such as users, events, questions, answers, and scores. External services are never the source of truth.
 
-API: Swift 6 / Hummingbird / PostgreSQL / PostgresNIO / Valkey / Atlas / OpenAPI. Apple: SwiftUI, iOS, iPadOS, and macOS 27.0 or later. Web: Swift / Hummingbird. Infrastructure: Terraform / Google Cloud Run / Cloudflare (DNS, Images, Email) / Docker / OpenTelemetry. Target the latest stable OS and browser releases and do not add unnecessary backward-compatibility branches.
+API: Swift 6 / Hummingbird / PostgreSQL / PostgresNIO / Valkey / Atlas / OpenAPI. Apple: SwiftUI, iOS and iPadOS 27.0 or later; macOS and visionOS are deferred (ADR-0006 in `vinoguessr-docs`). Web: Swift / Hummingbird. Infrastructure: Terraform / Google Cloud Run / Cloudflare (DNS, Images, Email) / Docker / OpenTelemetry. Target the latest stable OS and browser releases and do not add unnecessary backward-compatibility branches.
 
 Sign-in uses passkeys (WebAuthn) and email one-time codes. Sessions use tokens issued by the API; never trust a user ID or event participation state sent by a client. Images are served through Cloudflare Images, and event tickets are Apple Wallet passes.
 
@@ -28,7 +28,7 @@ If parallel agents are unavailable, record that constraint and do not merge unti
 
 Respect the existing structure and keep changes small and scoped to one Issue. Enable Swift 6 concurrency checking and avoid unjustified `@unchecked Sendable` or swallowed errors. Define public APIs in OpenAPI first and never hand-edit generated code. Database changes come with a versioned, forward-only Atlas migration and integration tests.
 
-For the API run `swift build` / `swift test` with integration tests against PostgreSQL and Valkey, and verify Atlas migrations. For the web run `swift build` / `swift test`. For Apple run build/test with the target Xcode and check required flows in the Simulator. For Terraform run `fmt` / `init -backend=false` / `validate`. A foundation PR without code runs structural checks only and must not be recorded as app-verified.
+For the API run `swift build` / `swift test` with integration tests against PostgreSQL and Valkey, and verify Atlas migrations. For the web run `swift build` / `swift test`. For Apple run `xcodebuild` build/test with the target Xcode on an iOS Simulator, not `swift test` on the macOS host, and check required flows in the Simulator. For Terraform run `fmt` / `init -backend=false` / `validate`. A foundation PR without code runs structural checks only and must not be recorded as app-verified.
 
 When changing the shared foundation in the `.github` repository, verify with `python scripts/validate_repository.py` (Python 3.11 or later, using `scripts/validation-requirements.txt`), `python -m unittest discover -s scripts -p 'test_*.py'`, and `actionlint`. Other repositories use the repository-specific section at the end of their AGENTS.md and the real verification steps in their README. Enable reusable workflows only after the calling repository actually has the code, lockfile, and tests.
 
@@ -84,7 +84,7 @@ This GitHub review is in addition to the independent Review Agent running in par
 
 ## vinoguessr-infrastructure specifics
 
-Shared rules source: `vinoguessr/.github@38adaa6afdfb7df020feb2a7ff93a6ddf1d79af8`.
+Shared rules source: `vinoguessr/.github@13fb97569cc4d4323a439db52f55ce962e63c12f`.
 
 Infrastructure code: Terraform / Google Cloud Run / Cloudflare / OpenTelemetry.
 

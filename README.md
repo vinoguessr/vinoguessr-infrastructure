@@ -332,4 +332,5 @@ The VinoGuessr API and PostgreSQL are the source of truth for business data. Nev
 
 After implementing, run `terraform fmt -check -recursive` / `terraform init -backend=false` / `terraform validate`. Do not run apply, production deploys, billed resource creation, or broad IAM grants without explicit approval.
 
-Follow [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md): satisfy the Issue's dependencies, then implement with an independent Review Agent running in parallel. Shared rules source: [vinoguessr/.github@38adaa6afdfb](https://github.com/vinoguessr/.github/tree/38adaa6afdfb7df020feb2a7ff93a6ddf1d79af8).
+Follow [AGENTS.md](AGENTS.md) and [CONTRIBUTING.md](CONTRIBUTING.md): satisfy the Issue's dependencies, then implement with an independent Review Agent running in parallel. Shared rules source: [vinoguessr/.github@13fb97569cc4](https://github.com/vinoguessr/.github/tree/13fb97569cc4d4323a439db52f55ce962e63c12f).
+<!-- /vinoguessr-foundation -->
