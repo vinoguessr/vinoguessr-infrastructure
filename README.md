@@ -162,7 +162,7 @@ From step 8 on, every Deploy run (a push to `main`, the daily 21:00 UTC schedule
 Wait until that run has finished. Filter by event so the newest push or scheduled run is not picked up instead, then list its steps:
 
 ```sh
-gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --event workflow_dispatch --branch main \
+gh run list -R vinoguessr/vinoguessr-api --workflow deploy.yml --all --event workflow_dispatch --branch main \
   --limit 1 --json databaseId,headSha,url
 gh run view <databaseId> -R vinoguessr/vinoguessr-api --json jobs \
   --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
@@ -225,7 +225,7 @@ Then run its Deploy workflow on `main` and check that every step succeeded ("Req
 
 ```sh
 gh workflow run deploy.yml -R vinoguessr/vinoguessr-web --ref main
-gh run list -R vinoguessr/vinoguessr-web --workflow deploy.yml --event workflow_dispatch --branch main \
+gh run list -R vinoguessr/vinoguessr-web --workflow deploy.yml --all --event workflow_dispatch --branch main \
   --limit 1 --json databaseId,headSha,url
 gh run view <databaseId> -R vinoguessr/vinoguessr-web --json jobs \
   --jq '.jobs[].steps[] | "\(.conclusion)\t\(.name)"'
@@ -246,8 +246,8 @@ Every command below assumes step 0 and the last three lines of step 1 have been 
    ```sh
    repo=vinoguessr-api  # or vinoguessr-web
    gh workflow disable deploy.yml -R "vinoguessr/$repo"
-   gh run list -R "vinoguessr/$repo" --workflow deploy.yml --status queued
-   gh run list -R "vinoguessr/$repo" --workflow deploy.yml --status in_progress
+   gh run list -R "vinoguessr/$repo" --workflow deploy.yml --all --status queued
+   gh run list -R "vinoguessr/$repo" --workflow deploy.yml --all --status in_progress
    ```
 
 2. Only then run `terraform apply`, so its refresh reads the image that is running. Do not apply a plan file saved before the pause.
