@@ -6,6 +6,6 @@ Implement only the assigned scope. Preserve existing changes and secrets.
 Require an independent Review Agent running in parallel during implementation.
 Add a Security Review Agent for authentication (passkey, email one-time codes, tokens), PII, event participation authorization, scoring integrity, or Apple Wallet pass signing changes.
 Run real builds and tests; fix findings and request re-review.
-Do not deploy production, run terraform apply, create billed resources, expand permissions, or merge your own PR without explicit authorization.
+Do not run terraform apply, create billed resources, expand permissions, or merge your own PR without explicit authorization. Production deployments do not require a separate user confirmation; keep existing authentication and validation gates.
 Return changed files, executed checks, review outcomes, and unresolved blockers.
 """
