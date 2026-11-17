@@ -1,0 +1,25 @@
+name: ワークアラウンド追跡
+description: 暫定回避の理由と取り外す条件を追跡する
+labels: ["workaround"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 回避する問題と根拠
+      description: 再現・環境・影響を簡潔に記載。恒久設計は対象外、秘密の脆弱性はSECURITY.mdへ。
+    validations:
+      required: true
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: 回避方法・関連箇所
+      description: 回避方法、code/PR、重複検索結果、上流Issue/PRを記載。関連がなければ「なし」。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 恒久対応・取り外す条件
+      description: 恒久対応案、削除条件、再確認の契機、回帰検証を記載。
+    validations:
+      required: true

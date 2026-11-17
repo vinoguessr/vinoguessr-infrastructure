@@ -41,11 +41,13 @@ When changing the shared foundation in the `.github` repository, verify with `py
 
 ## Tracking workarounds
 
-When you introduce an implementation or operation that temporarily works around a defect or constraint, check for related Issues and either add to an existing one or open a tracking Issue. Do not label a permanent design or a reasonable setting as a workaround without evidence.
+Before merging a PR that introduces a temporary workaround in code or operations, search for duplicates and create or update a tracking Issue in the affected repository. Apply the `workaround` label and link the Issue in the introducing PR; do not leave tracking until after merge. Do not classify a permanent design or a reasonable setting as a workaround without evidence.
 
-A tracking Issue records why it was introduced, the impact, the affected code and PR, the permanent fix, the condition for removing it, upstream Issues/PRs if any, when to recheck, and the regression check. Leave a why-not comment with the constraint and the Issue reference at the relevant code, and reference the tracking Issue from the introducing PR.
+Keep the Issue concise: record the problem and evidence, how it is avoided and the affected code/PR, and the permanent fix and removal conditions. Include upstream links when available, a recheck trigger, and the regression check. Leave a why-not comment with the constraint and Issue reference where the workaround is implemented. Use the workaround Issue Form; confidential vulnerabilities follow SECURITY.md instead of a public Issue.
 
-The introducing PR references the tracking Issue without auto-close keywords. Close the tracking Issue only after the removal condition and the regression check confirm that the permanent fix landed or the workaround is no longer needed.
+Reference the tracking Issue without auto-close keywords in the introducing PR. Close it only after the removal conditions and regression check confirm the permanent fix or that the workaround is no longer needed.
+
+Workaround policy source: `vinoguessr/.github@fe6704620ade6ea89bb02b5ed8617ffc1e2d9442`.
 
 ## Security
 
