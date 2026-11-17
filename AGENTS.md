@@ -53,7 +53,9 @@ Workaround policy source: `vinoguessr/.github@fe6704620ade6ea89bb02b5ed8617ffc1e
 
 Never leave secrets, tokens, personal data, or real user data in code, logs, Issues, or PRs. Never print credential values. Verify that a passkey's challenge, origin, and RP ID match, and rate-limit one-time code and token issuance. The API verifies event participation and every write of answers and scores against a trusted session, and never finalizes a score from a client-supplied value. Never commit Apple Wallet pass signing keys or certificates (`.p12`, `.p8`, and similar).
 
-Creating billed resources, production deploys, `terraform apply`, and broad IAM grants require explicit approval. Keep PII and credentials out of OpenTelemetry. Workflows use least-privilege permissions, and external actions are pinned to full commit SHAs. Shared reusable workflows are referenced by a SHA retained in the default branch history, never by an unmerged branch's SHA. Do not persist checkout credentials. Never run untrusted PR code with `pull_request_target`.
+Creating billed resources, `terraform apply`, and broad IAM grants require explicit approval. Production deployments do not require a separate user confirmation; existing authentication, permissions, CI, and review gates remain in force. Keep PII and credentials out of OpenTelemetry. Workflows use least-privilege permissions, and external actions are pinned to full commit SHAs. Shared reusable workflows are referenced by a SHA retained in the default branch history, never by an unmerged branch's SHA. Do not persist checkout credentials. Never run untrusted PR code with `pull_request_target`.
+
+Deployment confirmation policy source: `vinoguessr/.github@11e8eeceaf66fd70d45dc7cf98c4a423601c5d97`.
 
 ## MCP servers and Skills
 
@@ -63,7 +65,7 @@ At the start, check which MCP servers, Skills, and CLIs are actually available. 
 
 Use `codex/` branches and PRs; never push directly to `main`. Never overwrite existing changes, repositories, or licenses. Do not send messages to other people beyond the required GitHub Issue and Project updates unless explicitly asked. Add Issues to the cross-repository Project and record acceptance criteria and real dependencies. Handle confidential vulnerabilities through SECURITY.md, not public Issues.
 
-A PR records the related Issue, what changes, the checks run and their results, independent Review and Security Review results, and known limitations. Never fake required checks by skipping them. Releases have a tested commit and a changelog; Environments separate the approval boundaries of development, staging, and production. Use Packages only when there is something to distribute.
+A PR records the related Issue, what changes, the checks run and their results, independent Review and Security Review results, and known limitations. Never fake required checks by skipping them. Releases have a tested commit and a changelog; Environments keep development, staging, and production separated. Use Packages only when there is something to distribute.
 
 Record significant design changes as ADRs in `vinoguessr-docs` with context, decision, alternatives, and consequences, and update the wiki index. Update these rules and each repository's AGENTS.md as needed when bugs recur or a review finding matters. When the shared rules change, open follow-up PRs in the other repositories and state the source commit.
 
@@ -92,4 +94,4 @@ Infrastructure code: Terraform / Google Cloud Run / Cloudflare / OpenTelemetry.
 
 The VinoGuessr API and PostgreSQL are the source of truth for business data. Never expose credentials in Terraform state, plans, logs, or the repository. `vinoguessr-api`'s GitHub Actions builds container images and rolls them out to Cloud Run, and Terraform ignores drift in the running image.
 
-After implementing, run `terraform fmt -check -recursive` / `terraform init -backend=false` / `terraform validate`. Do not run apply, production deploys, billed resource creation, or broad IAM grants without explicit approval.
+After implementing, run `terraform fmt -check -recursive` / `terraform init -backend=false` / `terraform validate`. Do not run apply, billed resource creation, or broad IAM grants without explicit approval.
